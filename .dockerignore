@@ -1,0 +1,15 @@
+data/
+.env
+.git/
+.gitignore
+.vscode/
+.cursor/
+*.exe
+*.exe~
+*.db
+*.log
+Dockerfile*
+compose*.yml
+README.md
+agent-transcripts/
+terminals/

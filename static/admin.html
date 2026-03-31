@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API 2 Cursor · 管理面板</title>
+  <link rel="stylesheet" href="/static/admin.css?v=5">
+</head>
+<body>
+
+<!-- 登录页 -->
+<div id="login-page" class="login-page">
+  <svg style="display:none;">
+    <filter id="grain-filter">
+      <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="matrix" values="1 0 0 0 0, 0 1 0 0 0, 0 0 1 0 0, 0 0 0 0.15 0" />
+      <feBlend mode="overlay" in2="SourceGraphic" />
+    </filter>
+  </svg>
+  <div class="login-bg" aria-hidden="true">
+    <div class="login-bg-grainient"></div>
+  </div>
+
+  <div class="login-shell">
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="logo-orbit">
+          <div class="logo-icon" aria-hidden="true">
+            <svg width="38" height="44" viewBox="0 0 49 56" aria-hidden="true">
+              <path fill="currentColor" d="M48.0226 13.2547L25.6601 0.311786C24.942 -0.103929 24.0559 -0.103929 23.3378 0.311786L0.976347 13.2547C0.372691 13.6041 0 14.2503 0 14.9502V41.0498C0 41.7496 0.372691 42.3958 0.976347 42.7453L23.3389 55.6882C24.057 56.1039 24.943 56.1039 25.6611 55.6882L48.0237 42.7453C48.6273 42.3958 49 41.7496 49 41.0498V14.9502C49 14.2503 48.6273 13.6041 48.0237 13.2547H48.0226ZM46.6179 15.9964L25.0302 53.4802C24.8842 53.7328 24.4989 53.6296 24.4989 53.337V28.793C24.4989 28.3026 24.2375 27.849 23.8134 27.6027L2.61094 15.3312C2.35898 15.1849 2.46186 14.7987 2.75372 14.7987H45.9292C46.5423 14.7987 46.9255 15.4649 46.619 15.9974L46.6179 15.9964Z"/>
+            </svg>
+          </div>
+        </div>
+        <h1 class="login-title">API 2 Cursor</h1>
+        <p class="login-subtitle">管理控制台</p>
+        <p class="login-tagline">多渠道 · 统一网关</p>
+      </div>
+
+      <form id="login-form" class="login-form" autocomplete="off" novalidate>
+        <div class="form-group">
+          <label for="login-key" class="login-label">
+            管理员凭证
+            <button type="button" class="login-tooltip-trigger" aria-label="凭证说明，悬停或聚焦时显示">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+              <span class="login-tooltip" role="tooltip">与服务器环境变量 <code>ADMIN_TOKEN</code> 一致，或使用具备管理员权限的 API Key。凭证仅用于访问本服务，不会在浏览器外存储。</span>
+            </button>
+          </label>
+          <div class="login-field-wrap">
+            <span class="login-field-prefix" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </span>
+            <input
+              type="password"
+              id="login-key"
+              class="login-input"
+              placeholder="ADMIN_TOKEN 或具备管理员权限的 API Key"
+              spellcheck="false"
+              autocapitalize="off"
+              autocomplete="off"
+              required
+            >
+            <button type="button" class="login-reveal" id="login-reveal" aria-label="显示密钥" aria-pressed="false" title="显示 / 隐藏">
+              <svg class="icon-eye" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg class="icon-eye-off hidden" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-login btn-primary btn-block" id="login-submit">
+          <span class="login-btn-spinner hidden" id="login-spinner" aria-hidden="true"></span>
+          <span class="login-btn-label" id="login-btn-label">进入控制台</span>
+          <svg class="login-btn-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </button>
+      </form>
+
+      <ul class="login-trust" aria-label="安全说明">
+        <li><span class="login-trust-dot"></span>会话令牌仅存于 sessionStorage</li>
+        <li><span class="login-trust-dot"></span>HTTPS 部署时可进一步降低窃听风险</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- 主面板 -->
+<div id="app" class="app hidden">
+  <div class="app-bg" aria-hidden="true"></div>
+
+  <!-- 侧边栏 -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">
+        <svg class="sidebar-logo-mark" width="20" height="23" viewBox="0 0 49 56" aria-hidden="true">
+          <path fill="currentColor" d="M48.0226 13.2547L25.6601 0.311786C24.942 -0.103929 24.0559 -0.103929 23.3378 0.311786L0.976347 13.2547C0.372691 13.6041 0 14.2503 0 14.9502V41.0498C0 41.7496 0.372691 42.3958 0.976347 42.7453L23.3389 55.6882C24.057 56.1039 24.943 56.1039 25.6611 55.6882L48.0237 42.7453C48.6273 42.3958 49 41.7496 49 41.0498V14.9502C49 14.2503 48.6273 13.6041 48.0237 13.2547H48.0226ZM46.6179 15.9964L25.0302 53.4802C24.8842 53.7328 24.4989 53.6296 24.4989 53.337V28.793C24.4989 28.3026 24.2375 27.849 23.8134 27.6027L2.61094 15.3312C2.35898 15.1849 2.46186 14.7987 2.75372 14.7987H45.9292C46.5423 14.7987 46.9255 15.4649 46.619 15.9974L46.6179 15.9964Z"/>
+        </svg>
+        <span>API 2 Cursor</span>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <button class="nav-item active" data-tab="stats">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+        <span>统计概览</span>
+      </button>
+      <button class="nav-item" data-tab="keys">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+        <span>密钥管理</span>
+      </button>
+      <button class="nav-item" data-tab="channels">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+        <span>渠道管理</span>
+      </button>
+      <button class="nav-item" data-tab="mappings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+        <span>模型映射</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="sidebar-user">
+        <div class="user-avatar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        </div>
+        <span id="current-user">已登录</span>
+      </div>
+      <button id="btn-logout" class="btn btn-sm btn-ghost">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        退出
+      </button>
+    </div>
+  </aside>
+
+  <!-- 移动端顶栏 -->
+  <header class="mobile-header">
+    <button class="hamburger" id="hamburger">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <span class="mobile-title">API 2 Cursor</span>
+  </header>
+
+  <!-- 主内容区 -->
+  <main class="main-content">
+
+    <!-- 统计概览 -->
+    <section id="tab-stats" class="tab-panel active">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">统计概览</h1>
+          <p class="page-desc">查看系统运行状态和用量数据</p>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="loadStats()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          刷新
+        </button>
+      </div>
+      <div id="stats-cards" class="stats-grid"></div>
+    </section>
+
+    <!-- 密钥管理 -->
+    <section id="tab-keys" class="tab-panel">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">密钥管理</h1>
+          <p class="page-desc">管理 API 密钥及其权限</p>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="openModal('key')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          新增密钥
+        </button>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th><th>名称</th><th>密钥</th><th>绑定渠道</th><th>状态</th><th>QPM</th><th>创建时间</th><th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="keys-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 渠道管理 -->
+    <section id="tab-channels" class="tab-panel">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">渠道管理</h1>
+          <p class="page-desc">配置上游 API 提供商及其参数</p>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="openModal('channel')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          新增渠道
+        </button>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th><th>名称</th><th>类型</th><th>模型</th><th>状态</th>
+                <th>优先级</th><th>权重</th><th>QPM</th>
+                <th>调用</th><th>失败</th><th>输入Token</th><th>输出Token</th><th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="channels-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 模型映射 -->
+    <section id="tab-mappings" class="tab-panel">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">模型映射</h1>
+          <p class="page-desc">定义客户端模型到上游模型的映射规则</p>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="openModal('mapping')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          新增映射
+        </button>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th><th>规则名称</th><th>客户端模型</th><th>适用接口</th><th>适用渠道</th><th>上游模型</th><th>优先级</th><th>状态</th><th>创建时间</th><th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="mappings-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- 模态框 -->
+<div id="modal-overlay" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modal-title"></h3>
+      <button class="modal-close" onclick="closeModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <form id="modal-form" class="modal-body"></form>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" onclick="submitModal()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast-container" class="toast-container"></div>
+
+<!-- 移动端侧边栏遮罩 -->
+<div class="sidebar-backdrop hidden" id="sidebar-backdrop"></div>
+
+<script src="/static/admin.js?v=4"></script>
+</body>
+</html>

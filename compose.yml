@@ -1,0 +1,15 @@
+services:
+  api2cursor:
+    image: feisakura/api2cursor:latest
+    container_name: api2cursor
+    ports:
+      - "127.0.0.1:${PORT:-28473}:${PORT:-28473}"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PORT=${PORT:-28473}
+      - LISTEN_ADDR=0.0.0.0
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      - DB_PATH=data/api2cursor.db
+      - DEBUG_MODE=${DEBUG_MODE:-off}
+    restart: unless-stopped

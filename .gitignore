@@ -1,0 +1,8 @@
+api2cursor.exe
+data/
+*.db
+.env
+api2cursor.exe~
+release-pull/
+release/
+*.zip
