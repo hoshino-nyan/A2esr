@@ -213,6 +213,7 @@ func handleAnthropicStream(w http.ResponseWriter, ctx *models.RouteContext, payl
 }
 
 func handleGeminiBackend(w http.ResponseWriter, ctx *models.RouteContext, payload J, start time.Time) {
+	payload = adapter.NormalizeRequest(payload, ctx.UpstreamModel)
 	payload = injectInstructionsCC(payload, ctx.CustomInstructions, ctx.InstructionsPosition)
 	geminiPayload := adapter.CCToGeminiRequest(payload)
 	geminiPayload = proxy.ApplyBodyModifications(geminiPayload, ctx.BodyModifications)

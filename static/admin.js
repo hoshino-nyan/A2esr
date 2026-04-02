@@ -491,12 +491,12 @@
     var html = '<div class="form-group">';
     html += '<label for="' + id + '">' + label + '</label>';
     if (type === 'select') {
-      html += '<select id="' + id + '" name="' + name + '">';
+      html += '<div class="select-wrap"><select id="' + id + '" name="' + name + '">';
       (opts.options || []).forEach(function (o) {
         var sel = String(value) === String(o.value) ? ' selected' : '';
         html += '<option value="' + o.value + '"' + sel + '>' + o.label + '</option>';
       });
-      html += '</select>';
+      html += '</select></div>';
     } else if (type === 'textarea') {
       html += '<textarea id="' + id + '" name="' + name + '" rows="' + (opts.rows || 3) + '">' + escHtml(value) + '</textarea>';
     } else {

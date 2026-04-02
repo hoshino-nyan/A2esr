@@ -93,7 +93,7 @@ func GetAPIKeys() ([]models.APIKey, error) {
 }
 
 func fillAPIKeyStats(k *models.APIKey) error {
-	var lastUsed sql.NullString
+	var lastUsedStr sql.NullString
 	err := db.QueryRow(`SELECT
 		IFNULL((SELECT COUNT(*) FROM request_logs WHERE api_key_id=?), 0),
 		IFNULL((SELECT COUNT(*) FROM request_logs WHERE api_key_id=? AND status='success'), 0),
@@ -102,14 +102,23 @@ func fillAPIKeyStats(k *models.APIKey) error {
 		IFNULL((SELECT SUM(output_tokens) FROM request_logs WHERE api_key_id=?), 0),
 		(SELECT MAX(created_at) FROM request_logs WHERE api_key_id=?)`,
 		k.ID, k.ID, k.ID, k.ID, k.ID, k.ID).
-		Scan(&k.RequestCount, &k.SuccessCount, &k.ErrorCount, &k.InputTokens, &k.OutputTokens, &lastUsed)
+		Scan(&k.RequestCount, &k.SuccessCount, &k.ErrorCount, &k.InputTokens, &k.OutputTokens, &lastUsedStr)
 	if err != nil {
 		return err
 	}
-	if lastUsed.Valid && lastUsed.String != "" {
-		t, parseErr := time.Parse("2006-01-02 15:04:05", lastUsed.String)
-		if parseErr == nil {
-			k.LastUsedAt = &t
+	if lastUsedStr.Valid && lastUsedStr.String != "" {
+		formats := []string{
+			time.RFC3339Nano,
+			time.RFC3339,
+			"2006-01-02 15:04:05.999999999-07:00",
+			"2006-01-02 15:04:05.999999999",
+			"2006-01-02 15:04:05",
+		}
+		for _, f := range formats {
+			if t, parseErr := time.Parse(f, lastUsedStr.String); parseErr == nil {
+				k.LastUsedAt = &t
+				break
+			}
 		}
 	}
 	return nil

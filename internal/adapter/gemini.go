@@ -18,6 +18,7 @@ func CCToGeminiRequest(payload J) J {
 	messages := toSlice(payload["messages"])
 	var systemParts []string
 	var contents []J
+	toolCallNames := map[string]string{}
 
 	for _, raw := range messages {
 		msg, ok := raw.(map[string]interface{})
@@ -29,7 +30,7 @@ func CCToGeminiRequest(payload J) J {
 			systemParts = append(systemParts, flattenText(msg["content"]))
 			continue
 		}
-		converted := convertMessageToGemini(msg)
+		converted := convertMessageToGemini(msg, toolCallNames)
 		if converted != nil {
 			contents = append(contents, converted)
 		}
@@ -181,7 +182,7 @@ func (c *GeminiStreamConverter) makeChunk(delta J, finishReason string) J {
 	}
 }
 
-func convertMessageToGemini(msg J) J {
+func convertMessageToGemini(msg J, toolCallNames map[string]string) J {
 	role := toString(msg["role"])
 	geminiRole := "user"
 	if role == "assistant" {
@@ -189,11 +190,18 @@ func convertMessageToGemini(msg J) J {
 	}
 
 	if role == "tool" {
+		toolName := toString(msg["name"])
+		if toolName == "" {
+			toolName = toolCallNames[toString(msg["tool_call_id"])]
+		}
+		if toolName == "" {
+			return nil
+		}
 		return J{
 			"role": "user",
 			"parts": []J{{
 				"functionResponse": J{
-					"name":     orDefault(msg["name"], msg["tool_call_id"]),
+					"name":     toolName,
 					"response": parseJSONSafe(msg["content"]),
 				},
 			}},
@@ -226,9 +234,17 @@ func convertMessageToGemini(msg J) J {
 			continue
 		}
 		fn := toMap(tc["function"])
+		callID := toString(tc["id"])
+		name := toString(fn["name"])
+		if name == "" {
+			continue
+		}
+		if callID != "" {
+			toolCallNames[callID] = name
+		}
 		parts = append(parts, J{
 			"functionCall": J{
-				"name": fn["name"],
+				"name": name,
 				"args": parseJSONSafe(fn["arguments"]),
 			},
 		})
@@ -288,7 +304,9 @@ func convertToolsToGemini(tools interface{}) []J {
 			"description": fn["description"],
 		}
 		if p, ok := fn["parameters"]; ok {
-			decl["parameters"] = p
+			if schema := sanitizeGeminiSchema(p); len(schema) > 0 {
+				decl["parameters"] = schema
+			}
 		}
 		declarations = append(declarations, decl)
 	}
@@ -296,6 +314,55 @@ func convertToolsToGemini(tools interface{}) []J {
 		return nil
 	}
 	return []J{{"functionDeclarations": declarations}}
+}
+
+func sanitizeGeminiSchema(v interface{}) J {
+	m, ok := v.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	out := J{}
+	for key, val := range m {
+		switch key {
+		case "$schema", "$defs", "definitions", "additionalProperties", "patternProperties", "unevaluatedProperties", "unevaluatedItems", "examples", "example", "default", "deprecated", "readOnly", "writeOnly":
+			continue
+		case "properties":
+			props := J{}
+			for pk, pv := range toMap(val) {
+				if child := sanitizeGeminiSchema(pv); len(child) > 0 {
+					props[pk] = child
+				}
+			}
+			out[key] = props
+		case "items":
+			if child := sanitizeGeminiSchema(val); len(child) > 0 {
+				out[key] = child
+			}
+		case "anyOf", "oneOf", "allOf":
+			var arr []J
+			for _, item := range toSlice(val) {
+				if child := sanitizeGeminiSchema(item); len(child) > 0 {
+					arr = append(arr, child)
+				}
+			}
+			if len(arr) > 0 {
+				items := make([]interface{}, 0, len(arr))
+				for _, item := range arr {
+					items = append(items, item)
+				}
+				out[key] = items
+			}
+		case "type", "description", "required", "enum", "format", "nullable", "title", "minimum", "maximum", "minItems", "maxItems", "minLength", "maxLength":
+			out[key] = val
+		default:
+			if child, ok := val.(map[string]interface{}); ok {
+				if sanitized := sanitizeGeminiSchema(child); len(sanitized) > 0 {
+					out[key] = sanitized
+				}
+			}
+		}
+	}
+	return out
 }
 
 func extractGeminiParts(parts []interface{}) (string, string, []J) {

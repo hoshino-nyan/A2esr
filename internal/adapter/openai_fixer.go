@@ -11,7 +11,7 @@ func NormalizeRequest(payload J, upstreamModel string) J {
 		payload["model"] = upstreamModel
 	}
 	if msgs, ok := payload["messages"]; ok {
-		payload["messages"] = convertAnthropicMessages(msgs)
+		payload["messages"] = normalizeMessages(convertAnthropicMessages(msgs))
 	}
 	if _, ok := payload["tools"]; !ok {
 		return payload
@@ -24,6 +24,66 @@ func NormalizeRequest(payload J, upstreamModel string) J {
 	payload["tools"] = normalized
 	normalizeToolChoice(payload)
 	return payload
+}
+
+func normalizeMessages(msgs interface{}) interface{} {
+	arr := toSlice(msgs)
+	if arr == nil {
+		return msgs
+	}
+	for _, raw := range arr {
+		msg, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		normalizeMessageToolCalls(msg)
+	}
+	return arr
+}
+
+func normalizeMessageToolCalls(message J) {
+	convertLegacyFunctionCall(message, J{})
+	toolCalls := toSlice(message["tool_calls"])
+	if len(toolCalls) == 0 {
+		return
+	}
+	for i, raw := range toolCalls {
+		tc, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		fn := toMap(tc["function"])
+		if len(fn) == 0 {
+			fn = J{}
+			if name := toString(tc["name"]); name != "" {
+				fn["name"] = name
+			}
+			if args, ok := tc["arguments"]; ok {
+				fn["arguments"] = args
+			}
+			tc["function"] = fn
+		}
+		if fn["name"] == nil || toString(fn["name"]) == "" {
+			if name := toString(tc["name"]); name != "" {
+				fn["name"] = name
+			}
+		}
+		if fn["arguments"] == nil {
+			if args, ok := tc["arguments"]; ok {
+				fn["arguments"] = args
+			}
+		}
+		if tc["id"] == nil || tc["id"] == "" {
+			tc["id"] = proxy.GenID("call_")
+		}
+		if _, ok := tc["index"]; !ok {
+			tc["index"] = i
+		}
+		tc["type"] = "function"
+		normalizeToolCallArguments(tc)
+		delete(tc, "name")
+		delete(tc, "arguments")
+	}
 }
 
 func FixResponse(data J) J {
