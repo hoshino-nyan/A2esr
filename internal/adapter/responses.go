@@ -166,7 +166,18 @@ func CCToResponsesRequest(payload J) J {
 			if r == "" {
 				r = "user"
 			}
-			inputItems = append(inputItems, J{"role": r, "content": text})
+			if text == "" {
+				continue
+			}
+			contentType := "input_text"
+			if r == "assistant" {
+				contentType = "output_text"
+			}
+			inputItems = append(inputItems, J{
+				"type": "message",
+				"role": r,
+				"content": []J{{"type": contentType, "text": text}},
+			})
 		}
 	}
 
@@ -874,6 +885,19 @@ func copyRequestOptions(payload, result J) {
 	if v, ok := payload["tool_choice"]; ok {
 		result["tool_choice"] = v
 	}
+	if v, ok := payload["reasoning_effort"]; ok {
+		result["reasoning_effort"] = v
+	}
+	if reasoning, ok := payload["reasoning"]; ok {
+		if m, ok := reasoning.(map[string]interface{}); ok {
+			if effort, ok := m["effort"]; ok {
+				result["reasoning_effort"] = effort
+			}
+		}
+	}
+	if v, ok := payload["thinking"]; ok {
+		result["thinking"] = v
+	}
 }
 
 func copyResponsesRequestOptions(payload, result J) {
@@ -887,6 +911,15 @@ func copyResponsesRequestOptions(payload, result J) {
 	}
 	if v, ok := payload["max_tokens"]; ok {
 		result["max_output_tokens"] = v
+	}
+	if effort, ok := payload["reasoning_effort"]; ok {
+		result["reasoning"] = J{
+			"effort":  effort,
+			"summary": "auto",
+		}
+	}
+	if v, ok := payload["thinking"]; ok {
+		result["thinking"] = v
 	}
 }
 

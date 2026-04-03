@@ -535,6 +535,103 @@ func SelectChannel(clientModel string, route string, allowedChannelIDs string) (
 	return &topCandidates[0], upstreamModel, nil
 }
 
+func SelectChannelExcluding(clientModel, route, allowedChannelIDs string, excludeIDs []int64) (*models.Channel, string, error) {
+	mapping, err := GetBestModelMapping(clientModel, route, allowedChannelIDs)
+	if err != nil {
+		return nil, "", err
+	}
+
+	upstreamModel := clientModel
+	channelFilter := ""
+	if mapping != nil {
+		if mapping.UpstreamModel != "" {
+			upstreamModel = mapping.UpstreamModel
+		}
+		channelFilter = mapping.ChannelIDs
+	}
+
+	channels, err := GetChannels()
+	if err != nil {
+		return nil, upstreamModel, err
+	}
+
+	var candidates []models.Channel
+	filterIDs := parseIDs(channelFilter)
+	allowedIDs := parseIDs(allowedChannelIDs)
+
+	for _, ch := range channels {
+		if ch.Status != 1 {
+			continue
+		}
+		if idInList(ch.ID, excludeIDs) {
+			continue
+		}
+		if len(allowedIDs) > 0 && !idInList(ch.ID, allowedIDs) {
+			continue
+		}
+		if len(filterIDs) > 0 && !idInList(ch.ID, filterIDs) {
+			continue
+		}
+		if ch.Models != "" {
+			supported := false
+			for _, m := range strings.Split(ch.Models, ",") {
+				m = strings.TrimSpace(m)
+				if m == upstreamModel || m == clientModel || m == "*" {
+					supported = true
+					break
+				}
+			}
+			if !supported {
+				continue
+			}
+		}
+		candidates = append(candidates, ch)
+	}
+
+	if len(candidates) == 0 {
+		return nil, upstreamModel, fmt.Errorf("no available channel for model %q (all excluded or unavailable)", clientModel)
+	}
+
+	maxPriority := candidates[0].Priority
+	var topCandidates []models.Channel
+	for _, c := range candidates {
+		if c.Priority >= maxPriority {
+			maxPriority = c.Priority
+		}
+	}
+	for _, c := range candidates {
+		if c.Priority == maxPriority {
+			topCandidates = append(topCandidates, c)
+		}
+	}
+
+	if len(topCandidates) == 1 {
+		return &topCandidates[0], upstreamModel, nil
+	}
+
+	totalWeight := 0
+	for _, c := range topCandidates {
+		w := c.Weight
+		if w <= 0 {
+			w = 1
+		}
+		totalWeight += w
+	}
+
+	pick := int(time.Now().UnixNano() % int64(totalWeight))
+	for _, c := range topCandidates {
+		w := c.Weight
+		if w <= 0 {
+			w = 1
+		}
+		pick -= w
+		if pick < 0 {
+			return &c, upstreamModel, nil
+		}
+	}
+	return &topCandidates[0], upstreamModel, nil
+}
+
 func routeMatches(ruleRoute string, currentRoute string) bool {
 	ruleRoute = strings.TrimSpace(strings.ToLower(ruleRoute))
 	currentRoute = strings.TrimSpace(strings.ToLower(currentRoute))

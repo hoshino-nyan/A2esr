@@ -84,5 +84,8 @@ func toBlocks(content interface{}) []J {
 		}
 		return blocks
 	}
+	if arr, ok := content.([]J); ok {
+		return arr
+	}
 	return nil
 }

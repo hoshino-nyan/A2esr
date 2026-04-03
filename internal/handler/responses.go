@@ -66,41 +66,183 @@ func ResponsesEndpoint(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	dbg("响应生成", "模型=%s 上游=%s 后端=%s 流式=%v", clientModel, ctx.UpstreamModel, ctx.Backend, isStream)
+	dbg("响应生成", "模型=%s 上游=%s 后端=%s 流式=%v 渠道=%d", clientModel, ctx.UpstreamModel, ctx.Backend, isStream, ctx.ChannelID)
 
 	if ctx.Backend == "responses" {
-		handleResponsesNative(w, ctx, payload, startTime)
+		if isStream {
+			dispatchResponsesNativeStreamWithRetry(w, ctx, payload, clientModel, startTime)
+		} else {
+			dispatchResponsesNativeNonStreamWithRetry(w, ctx, payload, clientModel, startTime)
+		}
 		return
 	}
 
 	ccPayload := adapter.ResponsesToCC(payload)
-	ccPayload["model"] = ctx.UpstreamModel
-	ccPayload = injectInstructionsCC(ccPayload, ctx.CustomInstructions, ctx.InstructionsPosition)
 
-	switch ctx.Backend {
-	case "openai":
-		handleResponsesViaOpenAI(w, ctx, ccPayload, startTime)
-	case "gemini":
-		handleResponsesViaGemini(w, ctx, ccPayload, startTime)
-	default:
-		handleResponsesViaAnthropic(w, ctx, ccPayload, startTime)
+	if isStream {
+		dispatchResponsesStreamWithRetry(w, ctx, ccPayload, clientModel, startTime)
+	} else {
+		dispatchResponsesNonStreamWithRetry(w, ctx, ccPayload, clientModel, startTime)
 	}
 }
 
-func handleResponsesNative(w http.ResponseWriter, ctx *RouteCtx, payload J, start time.Time) {
+func dispatchResponsesNonStreamWithRetry(w http.ResponseWriter, ctx *RouteCtx, payload J, clientModel string, start time.Time) {
+	excludeIDs := []int64{}
+	var lastBuf *responseBuffer
+
+	for attempt := 0; attempt <= defaultMaxRetries; attempt++ {
+		if attempt > 0 {
+			newCtx := findAlternateContext(clientModel, "responses", ctx.AllowedChannelIDs, excludeIDs, false)
+			if newCtx == nil {
+				break
+			}
+			ctx = newCtx
+			dbg("重试", "Responses 切换到渠道=%d 后端=%s (尝试 %d/%d)", ctx.ChannelID, ctx.Backend, attempt+1, defaultMaxRetries+1)
+		}
+
+		buf := newResponseBuffer()
+		workPayload := deepCopyPayload(payload)
+		workPayload["model"] = ctx.UpstreamModel
+		workPayload = injectInstructionsCC(workPayload, ctx.CustomInstructions, ctx.InstructionsPosition)
+
+		switch ctx.Backend {
+		case "openai":
+			handleResponsesViaOpenAINonStream(buf, ctx, adapter.NormalizeRequest(workPayload, ""), proxy.BuildOpenAIURL(ctx),
+				proxy.ApplyHeaderModifications(proxy.BuildOpenAIHeaders(ctx.APIKey), ctx.HeaderModifications), start)
+		case "gemini":
+			geminiPayload := adapter.CCToGeminiRequest(workPayload)
+			geminiPayload = proxy.ApplyBodyModifications(geminiPayload, ctx.BodyModifications)
+			headers := proxy.ApplyHeaderModifications(proxy.BuildGeminiHeaders(ctx.APIKey), ctx.HeaderModifications)
+			handleResponsesViaGeminiNonStream(buf, ctx, geminiPayload, proxy.BuildGeminiURL(ctx, false), headers, start)
+		default:
+			anthropicPayload := adapter.CCToMessagesRequest(workPayload)
+			anthropicPayload = proxy.ApplyBodyModifications(anthropicPayload, ctx.BodyModifications)
+			headers := proxy.ApplyHeaderModifications(proxy.BuildAnthropicHeaders(ctx.APIKey), ctx.HeaderModifications)
+			handleResponsesViaAnthropicNonStream(buf, ctx, anthropicPayload, proxy.BuildAnthropicURL(ctx), headers, start)
+		}
+
+		lastBuf = buf
+		if !buf.isRetryable() {
+			break
+		}
+		excludeIDs = append(excludeIDs, ctx.ChannelID)
+		dbg("重试", "渠道=%d 返回 %d，尝试切换", ctx.ChannelID, buf.code)
+	}
+
+	if lastBuf != nil {
+		lastBuf.writeTo(w)
+	}
+}
+
+func dispatchResponsesStreamWithRetry(w http.ResponseWriter, ctx *RouteCtx, payload J, clientModel string, start time.Time) {
+	proxy.SSEResponse(w, func(sw *proxy.SSEWriter) {
+		resp, finalCtx, err := forwardStreamWithRetry(ctx, payload, clientModel, "responses")
+		if err != nil {
+			sw.WriteEvent("error", J{"error": err.Error()})
+			recordResponsesLogErr(finalCtx, start, err.Error())
+			return
+		}
+
+		converter := adapter.NewResponsesStreamConverter(clientModel)
+		for _, evt := range converter.StartEvents() {
+			sw.WriteRaw(evt)
+		}
+		processCCStreamAsResponses(sw, finalCtx, resp, converter, start)
+	})
+}
+
+func processCCStreamAsResponses(sw *proxy.SSEWriter, ctx *RouteCtx, resp *http.Response, converter *adapter.ResponsesStreamConverter, start time.Time) {
+	switch ctx.Backend {
+	case "openai":
+		thinkExtractor := &adapter.ThinkTagStreamExtractor{}
+		proxy.IterOpenAISSE(resp, func(chunk J) bool {
+			if chunk == nil {
+				for _, evt := range converter.Finalize() {
+					sw.WriteRaw(evt)
+				}
+				recordResponsesLog(ctx, nil, start)
+				return false
+			}
+			chunk = adapter.FixStreamChunk(chunk)
+			for _, c := range thinkExtractor.ProcessChunk(chunk) {
+				for _, evt := range converter.ProcessCCChunk(c) {
+					sw.WriteRaw(evt)
+				}
+			}
+			return true
+		})
+
+	case "gemini":
+		geminiConverter := adapter.NewGeminiStreamConverter()
+		proxy.IterGeminiSSE(resp, func(chunk J) bool {
+			for _, ccChunk := range geminiConverter.ProcessChunk(chunk) {
+				for _, evt := range converter.ProcessCCChunk(ccChunk) {
+					sw.WriteRaw(evt)
+				}
+			}
+			return true
+		})
+		for _, evt := range converter.Finalize() {
+			sw.WriteRaw(evt)
+		}
+		recordResponsesLog(ctx, nil, start)
+
+	default:
+		proxy.IterEventSSE(resp, func(eventType string, eventData J) bool {
+			for _, evt := range converter.ProcessAnthropicEvent(eventType, eventData) {
+				sw.WriteRaw(evt)
+			}
+			return true
+		})
+		for _, evt := range converter.Finalize() {
+			sw.WriteRaw(evt)
+		}
+		recordResponsesLog(ctx, nil, start)
+	}
+}
+
+func dispatchResponsesNativeNonStreamWithRetry(w http.ResponseWriter, ctx *RouteCtx, payload J, clientModel string, start time.Time) {
+	excludeIDs := []int64{}
+	var lastBuf *responseBuffer
+
+	for attempt := 0; attempt <= defaultMaxRetries; attempt++ {
+		if attempt > 0 {
+			newCtx := findAlternateContext(clientModel, "responses", ctx.AllowedChannelIDs, excludeIDs, false)
+			if newCtx == nil {
+				break
+			}
+			ctx = newCtx
+		}
+
+		buf := newResponseBuffer()
+		workPayload := prepareResponsesNativePayload(ctx, deepCopyPayload(payload))
+		handleResponsesNativeNonStream(buf, ctx, workPayload,
+			proxy.BuildResponsesURL(ctx),
+			proxy.ApplyHeaderModifications(proxy.BuildOpenAIHeaders(ctx.APIKey), ctx.HeaderModifications), start)
+
+		lastBuf = buf
+		if !buf.isRetryable() {
+			break
+		}
+		excludeIDs = append(excludeIDs, ctx.ChannelID)
+	}
+	if lastBuf != nil {
+		lastBuf.writeTo(w)
+	}
+}
+
+func dispatchResponsesNativeStreamWithRetry(w http.ResponseWriter, ctx *RouteCtx, payload J, clientModel string, start time.Time) {
+	workPayload := prepareResponsesNativePayload(ctx, payload)
+	handleResponsesNativeStream(w, ctx, workPayload,
+		proxy.BuildResponsesURL(ctx),
+		proxy.ApplyHeaderModifications(proxy.BuildOpenAIHeaders(ctx.APIKey), ctx.HeaderModifications), start)
+}
+
+func prepareResponsesNativePayload(ctx *RouteCtx, payload J) J {
 	payload["model"] = ctx.UpstreamModel
 	payload = injectInstructionsResponses(payload, ctx.CustomInstructions, ctx.InstructionsPosition)
 	payload = proxy.ApplyBodyModifications(payload, ctx.BodyModifications)
-
-	headers := proxy.BuildOpenAIHeaders(ctx.APIKey)
-	headers = proxy.ApplyHeaderModifications(headers, ctx.HeaderModifications)
-	url := proxy.BuildResponsesURL(ctx)
-
-	if ctx.IsStream {
-		handleResponsesNativeStream(w, ctx, payload, url, headers, start)
-	} else {
-		handleResponsesNativeNonStream(w, ctx, payload, url, headers, start)
-	}
+	return payload
 }
 
 func handleResponsesNativeNonStream(w http.ResponseWriter, ctx *RouteCtx, payload J, url string, headers map[string]string, start time.Time) {
@@ -190,6 +332,7 @@ func handleResponsesViaOpenAIStream(w http.ResponseWriter, ctx *RouteCtx, payloa
 			recordResponsesLogErr(ctx, start, err.Error())
 			return
 		}
+		thinkExtractor := &adapter.ThinkTagStreamExtractor{}
 		proxy.IterOpenAISSE(resp, func(chunk J) bool {
 			if chunk == nil {
 				for _, evt := range converter.Finalize() {
@@ -199,8 +342,10 @@ func handleResponsesViaOpenAIStream(w http.ResponseWriter, ctx *RouteCtx, payloa
 				return false
 			}
 			chunk = adapter.FixStreamChunk(chunk)
-			for _, evt := range converter.ProcessCCChunk(chunk) {
-				sw.WriteRaw(evt)
+			for _, c := range thinkExtractor.ProcessChunk(chunk) {
+				for _, evt := range converter.ProcessCCChunk(c) {
+					sw.WriteRaw(evt)
+				}
 			}
 			return true
 		})

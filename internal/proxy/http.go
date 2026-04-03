@@ -128,9 +128,6 @@ func ForwardRequest(url string, headers map[string]string, payload interface{}, 
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		log.Printf("[Proxy] 上游返回 %d: %s", resp.StatusCode, string(respBody)[:min(300, len(respBody))])
-		if stream {
-			return nil, fmt.Errorf("上游错误 %d: %s", resp.StatusCode, string(respBody))
-		}
 		return nil, &UpstreamError{
 			StatusCode: resp.StatusCode,
 			Body:       respBody,
@@ -147,7 +144,22 @@ type UpstreamError struct {
 }
 
 func (e *UpstreamError) Error() string {
-	return fmt.Sprintf("upstream error %d", e.StatusCode)
+	if len(e.Body) > 0 {
+		msg := string(e.Body)
+		if len(msg) > 300 {
+			msg = msg[:300]
+		}
+		return fmt.Sprintf("上游错误 %d: %s", e.StatusCode, msg)
+	}
+	return fmt.Sprintf("上游错误 %d", e.StatusCode)
+}
+
+func (e *UpstreamError) IsRetryable() bool {
+	switch e.StatusCode {
+	case 429, 500, 502, 503, 504:
+		return true
+	}
+	return false
 }
 
 // ─── SSE Helpers ──────────────────────────────

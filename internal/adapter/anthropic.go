@@ -52,12 +52,89 @@ func CCToMessagesRequest(payload J) J {
 	if tools, ok := payload["tools"]; ok {
 		result["tools"] = convertToolsToAnthropic(tools)
 	}
+
+	thinkingEnabled := applyAnthropicThinking(payload, result)
+
 	for _, key := range []string{"temperature", "top_p", "stream"} {
 		if v, ok := payload[key]; ok {
+			if thinkingEnabled && (key == "temperature" || key == "top_p") {
+				continue
+			}
 			result[key] = v
 		}
 	}
 	return result
+}
+
+func applyAnthropicThinking(payload, result J) bool {
+	if thinking, ok := payload["thinking"]; ok {
+		result["thinking"] = thinking
+		adjustMaxTokensForThinking(result, thinking)
+		return true
+	}
+
+	if effort, ok := payload["reasoning_effort"]; ok {
+		budget := effortToBudget(toString(effort))
+		thinking := J{"type": "enabled", "budget_tokens": budget}
+		result["thinking"] = thinking
+		adjustMaxTokensForThinking(result, thinking)
+		return true
+	}
+
+	model := strings.ToLower(toString(payload["model"]))
+	if isAnthropicThinkingModel(model) {
+		budget := 10000
+		thinking := J{"type": "enabled", "budget_tokens": budget}
+		result["thinking"] = thinking
+		adjustMaxTokensForThinking(result, thinking)
+		return true
+	}
+
+	return false
+}
+
+func adjustMaxTokensForThinking(result J, thinking interface{}) {
+	thinkingMap, ok := thinking.(map[string]interface{})
+	if !ok {
+		return
+	}
+	if toString(thinkingMap["type"]) != "enabled" {
+		return
+	}
+	budget := toInt(thinkingMap["budget_tokens"])
+	if budget <= 0 {
+		return
+	}
+	mt := toInt(result["max_tokens"])
+	if mt <= budget {
+		result["max_tokens"] = budget + 8192
+	}
+}
+
+func isAnthropicThinkingModel(model string) bool {
+	thinkingPatterns := []string{
+		"claude-3-7", "claude-3.7",
+		"claude-4", "claude-sonnet-4", "claude-opus-4",
+	}
+	for _, p := range thinkingPatterns {
+		if strings.Contains(model, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func effortToBudget(effort string) int {
+	switch strings.ToLower(effort) {
+	case "low":
+		return 5000
+	case "medium":
+		return 10000
+	case "high":
+		return 32000
+	default:
+		return 10000
+	}
 }
 
 // ─── Anthropic Messages → CC ──────────────────
@@ -275,13 +352,16 @@ func appendToolUseBlocks(content interface{}, toolCalls []interface{}) []J {
 func convertContent(msg J) interface{} {
 	content := msg["content"]
 	if content == nil {
-		return ""
+		return nil
 	}
 	if s, ok := content.(string); ok {
-		return s
+		if s == "" {
+			return nil
+		}
+		return []interface{}{J{"type": "text", "text": s}}
 	}
 	if arr, ok := content.([]interface{}); ok {
-		var blocks []J
+		var blocks []interface{}
 		for _, raw := range arr {
 			part, ok := raw.(map[string]interface{})
 			if !ok {
@@ -292,9 +372,12 @@ func convertContent(msg J) interface{} {
 				blocks = append(blocks, converted)
 			}
 		}
+		if len(blocks) == 0 {
+			return nil
+		}
 		return blocks
 	}
-	return fmt.Sprintf("%v", content)
+	return []interface{}{J{"type": "text", "text": fmt.Sprintf("%v", content)}}
 }
 
 func convertContentPart(part J) J {

@@ -137,7 +137,15 @@ func promoteReasoningField(container J) {
 	if rc, ok := container["reasoningContent"]; ok {
 		if _, exists := container["reasoning_content"]; !exists {
 			container["reasoning_content"] = rc
-			delete(container, "reasoningContent")
+		}
+		delete(container, "reasoningContent")
+	}
+	if rc, ok := container["reasoning"]; ok {
+		if s, isStr := rc.(string); isStr && s != "" {
+			if _, exists := container["reasoning_content"]; !exists {
+				container["reasoning_content"] = s
+			}
+			delete(container, "reasoning")
 		}
 	}
 }
@@ -343,6 +351,150 @@ func normalizeToolChoice(payload J) {
 	case "any":
 		payload["tool_choice"] = "required"
 	}
+}
+
+// ThinkTagStreamExtractor handles streaming extraction of <think>...</think> tags
+// from content into reasoning_content for OpenAI-compatible providers (e.g. DeepSeek).
+type ThinkTagStreamExtractor struct {
+	inThink   bool
+	tagBuffer string
+}
+
+func (e *ThinkTagStreamExtractor) ProcessChunk(chunk J) []J {
+	choices := toSlice(chunk["choices"])
+	if len(choices) == 0 {
+		return []J{chunk}
+	}
+	choice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return []J{chunk}
+	}
+	delta := toMap(choice["delta"])
+	if _, hasRC := delta["reasoning_content"]; hasRC {
+		return []J{chunk}
+	}
+	content := toString(delta["content"])
+	if content == "" {
+		return []J{chunk}
+	}
+
+	normalText, thinkingText := e.extractThinkTags(content)
+
+	var results []J
+	if thinkingText != "" {
+		rc := cloneChunk(chunk)
+		setDeltaField(rc, "reasoning_content", thinkingText)
+		removeDeltaField(rc, "content")
+		results = append(results, rc)
+	}
+	if normalText != "" {
+		nc := cloneChunk(chunk)
+		setDeltaField(nc, "content", normalText)
+		results = append(results, nc)
+	}
+	if len(results) == 0 {
+		removeDeltaField(chunk, "content")
+		return []J{chunk}
+	}
+	return results
+}
+
+func (e *ThinkTagStreamExtractor) extractThinkTags(content string) (normalText, thinkingText string) {
+	full := e.tagBuffer + content
+	e.tagBuffer = ""
+
+	for len(full) > 0 {
+		if e.inThink {
+			idx := indexOf(full, "</think>")
+			if idx >= 0 {
+				thinkingText += full[:idx]
+				full = full[idx+8:]
+				e.inThink = false
+			} else {
+				tail := partialSuffix(full, "</think>")
+				if tail > 0 {
+					e.tagBuffer = full[len(full)-tail:]
+					thinkingText += full[:len(full)-tail]
+				} else {
+					thinkingText += full
+				}
+				return
+			}
+		} else {
+			idx := indexOf(full, "<think>")
+			if idx >= 0 {
+				normalText += full[:idx]
+				full = full[idx+7:]
+				e.inThink = true
+			} else {
+				tail := partialSuffix(full, "<think>")
+				if tail > 0 {
+					e.tagBuffer = full[len(full)-tail:]
+					normalText += full[:len(full)-tail]
+				} else {
+					normalText += full
+				}
+				return
+			}
+		}
+	}
+	return
+}
+
+func partialSuffix(s, tag string) int {
+	maxCheck := len(tag) - 1
+	if maxCheck > len(s) {
+		maxCheck = len(s)
+	}
+	for i := maxCheck; i >= 1; i-- {
+		if s[len(s)-i:] == tag[:i] {
+			return i
+		}
+	}
+	return 0
+}
+
+func cloneChunk(chunk J) J {
+	out := J{}
+	for k, v := range chunk {
+		out[k] = v
+	}
+	choices := toSlice(out["choices"])
+	if len(choices) > 0 {
+		oldChoice, _ := choices[0].(map[string]interface{})
+		newChoice := J{}
+		for k, v := range oldChoice {
+			newChoice[k] = v
+		}
+		oldDelta := toMap(oldChoice["delta"])
+		newDelta := J{}
+		for k, v := range oldDelta {
+			newDelta[k] = v
+		}
+		newChoice["delta"] = newDelta
+		out["choices"] = []interface{}{newChoice}
+	}
+	return out
+}
+
+func setDeltaField(chunk J, key string, value interface{}) {
+	choices := toSlice(chunk["choices"])
+	if len(choices) == 0 {
+		return
+	}
+	choice, _ := choices[0].(map[string]interface{})
+	delta := toMap(choice["delta"])
+	delta[key] = value
+}
+
+func removeDeltaField(chunk J, key string) {
+	choices := toSlice(chunk["choices"])
+	if len(choices) == 0 {
+		return
+	}
+	choice, _ := choices[0].(map[string]interface{})
+	delta := toMap(choice["delta"])
+	delete(delta, key)
 }
 
 func convertAnthropicMessages(msgs interface{}) interface{} {

@@ -276,7 +276,37 @@ func buildGenerationConfig(payload J) J {
 			config["stopSequences"] = []interface{}{stop}
 		}
 	}
+	if effort, ok := payload["reasoning_effort"]; ok {
+		budget := geminiEffortToBudget(toString(effort))
+		if budget > 0 {
+			config["thinkingConfig"] = J{"thinkingBudget": budget}
+		}
+	} else if thinking, ok := payload["thinking"]; ok {
+		if m, ok := thinking.(map[string]interface{}); ok {
+			if toString(m["type"]) == "enabled" {
+				budget := toInt(m["budget_tokens"])
+				if budget > 0 {
+					config["thinkingConfig"] = J{"thinkingBudget": budget}
+				}
+			}
+		}
+	}
 	return config
+}
+
+func geminiEffortToBudget(effort string) int {
+	switch strings.ToLower(effort) {
+	case "low":
+		return 2048
+	case "medium":
+		return 8192
+	case "high":
+		return 24576
+	case "none", "off":
+		return 0
+	default:
+		return 8192
+	}
 }
 
 func convertToolsToGemini(tools interface{}) []J {

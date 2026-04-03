@@ -73,23 +73,69 @@ func ChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	dbg("聊天补全", "模型=%s 上游=%s 后端=%s 流式=%v 渠道=%d", clientModel, ctx.UpstreamModel, ctx.Backend, isStream, ctx.ChannelID)
 
-	// Normalize responses format sent to CC endpoint
 	if msgs := adapter.ToSlicePublic(payload["messages"]); len(msgs) == 0 && payload["input"] != nil {
 		payload = adapter.ResponsesToCC(payload)
 	}
 
-	payload["model"] = ctx.UpstreamModel
-
-	switch ctx.Backend {
-	case "openai":
-		handleOpenAIBackend(w, ctx, payload, startTime)
-	case "responses":
-		handleResponsesBackend(w, ctx, payload, startTime)
-	case "gemini":
-		handleGeminiBackend(w, ctx, payload, startTime)
-	default:
-		handleAnthropicBackend(w, ctx, payload, startTime)
+	if isStream {
+		dispatchCCStreamWithRetry(w, ctx, payload, clientModel, startTime)
+	} else {
+		dispatchCCNonStreamWithRetry(w, ctx, payload, clientModel, startTime)
 	}
+}
+
+func dispatchCCNonStreamWithRetry(w http.ResponseWriter, ctx *models.RouteContext, payload J, clientModel string, start time.Time) {
+	excludeIDs := []int64{}
+	var lastBuf *responseBuffer
+
+	for attempt := 0; attempt <= defaultMaxRetries; attempt++ {
+		if attempt > 0 {
+			newCtx := findAlternateContext(clientModel, "chat", ctx.AllowedChannelIDs, excludeIDs, false)
+			if newCtx == nil {
+				break
+			}
+			ctx = newCtx
+			dbg("重试", "切换到渠道=%d 后端=%s (尝试 %d/%d)", ctx.ChannelID, ctx.Backend, attempt+1, defaultMaxRetries+1)
+		}
+
+		buf := newResponseBuffer()
+		workPayload := deepCopyPayload(payload)
+		workPayload["model"] = ctx.UpstreamModel
+
+		switch ctx.Backend {
+		case "openai":
+			handleOpenAIBackend(buf, ctx, workPayload, start)
+		case "responses":
+			handleResponsesBackend(buf, ctx, workPayload, start)
+		case "gemini":
+			handleGeminiBackend(buf, ctx, workPayload, start)
+		default:
+			handleAnthropicBackend(buf, ctx, workPayload, start)
+		}
+
+		lastBuf = buf
+		if !buf.isRetryable() {
+			break
+		}
+		excludeIDs = append(excludeIDs, ctx.ChannelID)
+		dbg("重试", "渠道=%d 返回 %d，尝试切换", ctx.ChannelID, buf.code)
+	}
+
+	if lastBuf != nil {
+		lastBuf.writeTo(w)
+	}
+}
+
+func dispatchCCStreamWithRetry(w http.ResponseWriter, ctx *models.RouteContext, payload J, clientModel string, start time.Time) {
+	proxy.SSEResponse(w, func(sw *proxy.SSEWriter) {
+		resp, finalCtx, err := forwardStreamWithRetry(ctx, payload, clientModel, "chat")
+		if err != nil {
+			sw.WriteData(J{"error": J{"message": err.Error(), "type": "upstream_error"}})
+			recordLog(finalCtx, 0, 0, time.Since(start).Milliseconds(), "error", err.Error())
+			return
+		}
+		processCCStream(sw, finalCtx, resp, clientModel, start)
+	})
 }
 
 func handleOpenAIBackend(w http.ResponseWriter, ctx *models.RouteContext, payload J, start time.Time) {
@@ -134,6 +180,7 @@ func handleOpenAIStream(w http.ResponseWriter, ctx *models.RouteContext, payload
 			return
 		}
 		var lastUsage J
+		thinkExtractor := &adapter.ThinkTagStreamExtractor{}
 		proxy.IterOpenAISSE(resp, func(chunk J) bool {
 			if chunk == nil {
 				sw.WriteDone()
@@ -144,8 +191,10 @@ func handleOpenAIStream(w http.ResponseWriter, ctx *models.RouteContext, payload
 				lastUsage = u
 			}
 			chunk = adapter.FixStreamChunk(chunk)
-			chunk["model"] = ctx.ClientModel
-			sw.WriteData(chunk)
+			for _, c := range thinkExtractor.ProcessChunk(chunk) {
+				c["model"] = ctx.ClientModel
+				sw.WriteData(c)
+			}
 			return true
 		})
 	})
