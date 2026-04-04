@@ -33,8 +33,9 @@ func Init(dbPath string) error {
 			initErr = fmt.Errorf("open database: %w", err)
 			return
 		}
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
+		db.SetMaxOpenConns(4)  // WAL 模式允许并发读
+		db.SetMaxIdleConns(4)
+		db.SetConnMaxLifetime(0) // 不超时回收连接
 
 		if err := migrate(); err != nil {
 			initErr = fmt.Errorf("migrate: %w", err)
@@ -143,6 +144,19 @@ func migrate() error {
 		`ALTER TABLE model_mappings ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`,
 		`CREATE INDEX IF NOT EXISTS idx_model_mappings_lookup ON model_mappings(client_model, route, status, priority DESC)`,
 		`ALTER TABLE request_logs ADD COLUMN client_ip TEXT NOT NULL DEFAULT ''`,
+		`CREATE TABLE IF NOT EXISTS request_details (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			request_log_id INTEGER NOT NULL DEFAULT 0,
+			request_headers TEXT NOT NULL DEFAULT '',
+			request_body TEXT NOT NULL DEFAULT '',
+			prompt TEXT NOT NULL DEFAULT '',
+			user_message TEXT NOT NULL DEFAULT '',
+			ai_response TEXT NOT NULL DEFAULT '',
+			tool_calls TEXT NOT NULL DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_request_details_created ON request_details(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_request_details_log_id ON request_details(request_log_id)`,
 	}
 
 	for _, stmt := range stmts {

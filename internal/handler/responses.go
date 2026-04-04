@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -14,15 +15,27 @@ import (
 )
 
 func ResponsesEndpoint(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "读取请求失败", "invalid_request")
+		return
+	}
+	if len(body) >= maxRequestBodySize {
+		writeError(w, http.StatusRequestEntityTooLarge, "请求体超过大小限制", "invalid_request")
 		return
 	}
 	var payload J
 	if err := json.Unmarshal(body, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, "JSON 解析失败", "invalid_request")
 		return
+	}
+
+	// 捕获请求信息
+	capture := &models.RequestCapture{
+		Headers:     marshalHeaders(r),
+		Body:        string(body),
+		Prompt:      extractSystemPrompt(payload),
+		UserMessage: extractLastUserMessage(payload),
 	}
 
 	clientModel := str(payload["model"])
@@ -68,6 +81,8 @@ func ResponsesEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	dbg("响应生成", "模型=%s 上游=%s 后端=%s 流式=%v 渠道=%d", clientModel, ctx.UpstreamModel, ctx.Backend, isStream, ctx.ChannelID)
 
+	ctx.Capture = capture
+
 	if ctx.Backend == "responses" {
 		if isStream {
 			dispatchResponsesNativeStreamWithRetry(w, ctx, payload, clientModel, startTime)
@@ -89,9 +104,12 @@ func ResponsesEndpoint(w http.ResponseWriter, r *http.Request) {
 func dispatchResponsesNonStreamWithRetry(w http.ResponseWriter, ctx *RouteCtx, payload J, clientModel string, start time.Time) {
 	excludeIDs := []int64{}
 	var lastBuf *responseBuffer
+	var lastErr error
 
 	for attempt := 0; attempt <= defaultMaxRetries; attempt++ {
 		if attempt > 0 {
+			time.Sleep(retryDelay(attempt, lastErr))
+
 			newCtx := findAlternateContext(clientModel, "responses", ctx.AllowedChannelIDs, excludeIDs, false)
 			if newCtx == nil {
 				break
@@ -121,16 +139,21 @@ func dispatchResponsesNonStreamWithRetry(w http.ResponseWriter, ctx *RouteCtx, p
 			handleResponsesViaAnthropicNonStream(buf, ctx, anthropicPayload, proxy.BuildAnthropicURL(ctx), headers, start)
 		}
 
+		if lastBuf != nil {
+			recycleResponseBuffer(lastBuf)
+		}
 		lastBuf = buf
 		if !buf.isRetryable() {
 			break
 		}
+		lastErr = fmt.Errorf("status %d", buf.code)
 		excludeIDs = append(excludeIDs, ctx.ChannelID)
 		dbg("重试", "渠道=%d 返回 %d，尝试切换", ctx.ChannelID, buf.code)
 	}
 
 	if lastBuf != nil {
 		lastBuf.writeTo(w)
+		recycleResponseBuffer(lastBuf)
 	}
 }
 
@@ -204,9 +227,12 @@ func processCCStreamAsResponses(sw *proxy.SSEWriter, ctx *RouteCtx, resp *http.R
 func dispatchResponsesNativeNonStreamWithRetry(w http.ResponseWriter, ctx *RouteCtx, payload J, clientModel string, start time.Time) {
 	excludeIDs := []int64{}
 	var lastBuf *responseBuffer
+	var lastErr error
 
 	for attempt := 0; attempt <= defaultMaxRetries; attempt++ {
 		if attempt > 0 {
+			time.Sleep(retryDelay(attempt, lastErr))
+
 			newCtx := findAlternateContext(clientModel, "responses", ctx.AllowedChannelIDs, excludeIDs, false)
 			if newCtx == nil {
 				break
@@ -220,14 +246,19 @@ func dispatchResponsesNativeNonStreamWithRetry(w http.ResponseWriter, ctx *Route
 			proxy.BuildResponsesURL(ctx),
 			proxy.ApplyHeaderModifications(proxy.BuildOpenAIHeaders(ctx.APIKey), ctx.HeaderModifications), start)
 
+		if lastBuf != nil {
+			recycleResponseBuffer(lastBuf)
+		}
 		lastBuf = buf
 		if !buf.isRetryable() {
 			break
 		}
+		lastErr = fmt.Errorf("status %d", buf.code)
 		excludeIDs = append(excludeIDs, ctx.ChannelID)
 	}
 	if lastBuf != nil {
 		lastBuf.writeTo(w)
+		recycleResponseBuffer(lastBuf)
 	}
 }
 
@@ -480,13 +511,22 @@ func recordResponsesLog(ctx *RouteCtx, data J, start time.Time) {
 	dur := time.Since(start).Milliseconds()
 	go func() {
 		database.IncrChannelUsage(ctx.ChannelID, inp, outp, false)
-		_ = database.InsertRequestLog(&models.RequestLog{
+		logID := database.InsertRequestLogReturnID(&models.RequestLog{
 			UserID: ctx.UserID, APIKeyID: ctx.APIKeyID, ChannelID: ctx.ChannelID,
 			ClientModel: ctx.ClientModel, UpstreamModel: ctx.UpstreamModel,
 			Route: "responses", Backend: ctx.Backend, Stream: ctx.IsStream,
 			InputTokens: inp, OutputTokens: outp, Duration: int(dur),
 			Status: "success", ClientIP: ctx.ClientIP, CreatedAt: time.Now(),
 		})
+		if logID > 0 && ctx.Capture != nil {
+			_ = database.InsertRequestDetail(&models.RequestDetail{
+				RequestLogID:   logID,
+				RequestHeaders: ctx.Capture.Headers,
+				RequestBody:    ctx.Capture.Body,
+				Prompt:         ctx.Capture.Prompt,
+				UserMessage:    ctx.Capture.UserMessage,
+			})
+		}
 	}()
 }
 
@@ -494,11 +534,20 @@ func recordResponsesLogErr(ctx *RouteCtx, start time.Time, errMsg string) {
 	dur := time.Since(start).Milliseconds()
 	go func() {
 		database.IncrChannelUsage(ctx.ChannelID, 0, 0, true)
-		_ = database.InsertRequestLog(&models.RequestLog{
+		logID := database.InsertRequestLogReturnID(&models.RequestLog{
 			UserID: ctx.UserID, APIKeyID: ctx.APIKeyID, ChannelID: ctx.ChannelID,
 			ClientModel: ctx.ClientModel, UpstreamModel: ctx.UpstreamModel,
 			Route: "responses", Backend: ctx.Backend, Stream: ctx.IsStream,
 			Duration: int(dur), Status: "error", ErrorMsg: errMsg, ClientIP: ctx.ClientIP, CreatedAt: time.Now(),
 		})
+		if logID > 0 && ctx.Capture != nil {
+			_ = database.InsertRequestDetail(&models.RequestDetail{
+				RequestLogID:   logID,
+				RequestHeaders: ctx.Capture.Headers,
+				RequestBody:    ctx.Capture.Body,
+				Prompt:         ctx.Capture.Prompt,
+				UserMessage:    ctx.Capture.UserMessage,
+			})
+		}
 	}()
 }

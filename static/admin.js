@@ -24,7 +24,7 @@
   const $mobileTitle = document.getElementById('mobile-title');
   let channelOptions = [];
 
-  var SECTION_TITLES = { stats: '统计概览', keys: '密钥管理', channels: '渠道管理', mappings: '模型映射' };
+  var SECTION_TITLES = { stats: '统计概览', keys: '密钥管理', channels: '渠道管理', mappings: '模型映射', details: '请求详情' };
 
   var STAT_SVGS = {
     chart: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>',
@@ -168,7 +168,7 @@
       $mobileTitle.textContent = SECTION_TITLES[name] || 'API 2 Cursor';
     }
     closeMobileNav();
-    var loaders = { stats: loadStats, keys: loadKeys, channels: loadChannels, mappings: loadMappings };
+    var loaders = { stats: loadStats, keys: loadKeys, channels: loadChannels, mappings: loadMappings, details: loadDetails };
     if (loaders[name]) loaders[name]();
   }
 
@@ -481,6 +481,309 @@
     } catch (err) { toast(err.message, 'error'); }
   };
 
+  // ── Request Details ──
+
+  var detailsPage = 0;
+  var detailsLimit = 20;
+
+  window.loadDetails = async function (page) {
+    if (page !== undefined) detailsPage = page;
+    var offset = detailsPage * detailsLimit;
+    try {
+      var res = await api('GET', '/api/admin/request-details?limit=' + detailsLimit + '&offset=' + offset);
+      var rows = res.data || [];
+      var total = res.total || 0;
+      document.getElementById('details-summary').textContent = '共 ' + total + ' 条记录（最多保留 200 条）';
+
+      var list = document.getElementById('details-list');
+      if (!rows.length) {
+        list.innerHTML = '<div class="card" style="padding:48px;text-align:center;color:var(--text-muted)">暂无请求详情记录</div>';
+        document.getElementById('details-pager').innerHTML = '';
+        return;
+      }
+
+      var html = '';
+      rows.forEach(function (d) {
+        var statusCls = d.status === 'success' ? 'badge-active' : 'badge-disabled';
+        var streamLabel = d.stream ? '流式' : '非流式';
+        html += '<div class="detail-card card" onclick="viewDetail(' + d.id + ')" style="cursor:pointer">'
+          + '<div class="detail-card-header">'
+          +   '<div class="detail-card-meta">'
+          +     '<span class="badge ' + statusCls + '">' + escHtml(d.status) + '</span>'
+          +     '<span class="badge badge-type">' + escHtml(d.route) + '</span>'
+          +     '<span class="badge badge-user">' + escHtml(streamLabel) + '</span>'
+          +     '<code>' + escHtml(d.client_model) + '</code>'
+          +     (d.upstream_model && d.upstream_model !== d.client_model ? ' → <code>' + escHtml(d.upstream_model) + '</code>' : '')
+          +   '</div>'
+          +   '<div class="detail-card-time">' + fmtDate(d.created_at) + '</div>'
+          + '</div>'
+          + '<div class="detail-card-body">'
+          +   '<div class="detail-field"><span class="detail-label">用户消息</span><span class="detail-value">' + escHtml(truncText(d.user_message, 200)) + '</span></div>'
+          +   (d.prompt ? '<div class="detail-field"><span class="detail-label">提示词</span><span class="detail-value">' + escHtml(truncText(d.prompt, 120)) + '</span></div>' : '')
+          +   '<div class="detail-card-stats">'
+          +     (d.input_tokens ? '<span>输入 ' + fmtNum(d.input_tokens) + '</span>' : '')
+          +     (d.output_tokens ? '<span>输出 ' + fmtNum(d.output_tokens) + '</span>' : '')
+          +     (d.duration_ms ? '<span>' + d.duration_ms + 'ms</span>' : '')
+          +     (d.client_ip ? '<span>IP ' + escHtml(d.client_ip) + '</span>' : '')
+          +   '</div>'
+          + '</div>'
+          + '</div>';
+      });
+      list.innerHTML = html;
+
+      // 分页
+      var totalPages = Math.ceil(total / detailsLimit);
+      var pager = '';
+      if (totalPages > 1) {
+        pager += '<button class="btn btn-sm btn-outline" ' + (detailsPage <= 0 ? 'disabled' : '') + ' onclick="loadDetails(' + (detailsPage - 1) + ')">上一页</button>';
+        pager += '<span style="line-height:32px;color:var(--text-secondary);font-size:13px">' + (detailsPage + 1) + ' / ' + totalPages + '</span>';
+        pager += '<button class="btn btn-sm btn-outline" ' + (detailsPage >= totalPages - 1 ? 'disabled' : '') + ' onclick="loadDetails(' + (detailsPage + 1) + ')">下一页</button>';
+      }
+      document.getElementById('details-pager').innerHTML = pager;
+    } catch (err) {
+      toast('加载请求详情失败: ' + err.message, 'error');
+    }
+  };
+
+  window.viewDetail = async function (id) {
+    try {
+      var d = await api('GET', '/api/admin/request-details/' + id);
+
+      // 设置元数据供下载命名使用
+      _detailMeta.backend = d.backend || '';
+      _detailMeta.model = d.upstream_model || d.client_model || '';
+      _detailMeta.time = d.created_at || '';
+
+      var html = '<div class="detail-view">';
+
+      // 基本信息
+      html += '<div class="detail-section">'
+        + '<h4 class="detail-section-title">基本信息</h4>'
+        + '<div class="detail-grid">'
+        +   detailItem('状态', d.status)
+        +   detailItem('路由', d.route)
+        +   detailItem('后端', d.backend)
+        +   detailItem('流式', d.stream ? '是' : '否')
+        +   detailItem('客户端模型', d.client_model)
+        +   detailItem('上游模型', d.upstream_model)
+        +   detailItem('输入Token', fmtNum(d.input_tokens))
+        +   detailItem('输出Token', fmtNum(d.output_tokens))
+        +   detailItem('耗时', d.duration_ms + 'ms')
+        +   detailItem('客户端IP', d.client_ip)
+        +   detailItem('时间', fmtDate(d.created_at))
+        + '</div></div>';
+
+      if (d.error_msg) {
+        html += '<div class="detail-section"><h4 class="detail-section-title" style="color:var(--red)">错误信息</h4>' + renderTruncatedPre(d.error_msg, '错误信息') + '</div>';
+      }
+
+      // 用户消息
+      if (d.user_message) {
+        html += '<div class="detail-section"><h4 class="detail-section-title">用户消息</h4>' + renderTruncatedPre(d.user_message, '用户消息') + '</div>';
+      }
+
+      // 提示词
+      if (d.prompt) {
+        html += '<div class="detail-section"><h4 class="detail-section-title">提示词 / 系统消息</h4>' + renderTruncatedPre(d.prompt, '提示词') + '</div>';
+      }
+
+      // AI 响应
+      if (d.ai_response) {
+        html += '<div class="detail-section"><h4 class="detail-section-title">AI 响应</h4>' + renderTruncatedPre(d.ai_response, 'AI响应') + '</div>';
+      }
+
+      // 工具调用
+      if (d.tool_calls) {
+        html += '<div class="detail-section"><h4 class="detail-section-title">工具调用</h4>' + renderTruncatedPre(tryFormatJSON(d.tool_calls), '工具调用') + '</div>';
+      }
+
+      // 请求头
+      if (d.request_headers) {
+        html += '<div class="detail-section"><h4 class="detail-section-title">请求头</h4>' + renderTruncatedPre(tryFormatJSON(d.request_headers), '请求头') + '</div>';
+      }
+
+      // 请求体
+      if (d.request_body) {
+        html += '<div class="detail-section"><h4 class="detail-section-title">请求体</h4>' + renderTruncatedPre(tryFormatJSON(d.request_body), '请求体', 'detail-code-long') + '</div>';
+      }
+
+      html += '</div>';
+      document.getElementById('detail-modal-body').innerHTML = html;
+      document.getElementById('detail-modal-title').textContent = '请求详情 #' + d.id;
+      document.getElementById('detail-modal-overlay').classList.remove('hidden');
+    } catch (err) {
+      toast('加载详情失败: ' + err.message, 'error');
+    }
+  };
+
+  window.closeDetailModal = function () {
+    document.getElementById('detail-modal-overlay').classList.add('hidden');
+    document.getElementById('detail-modal-body').innerHTML = '';
+  };
+
+  // 点击遮罩关闭详情弹窗
+  (function () {
+    var ov = document.getElementById('detail-modal-overlay');
+    if (ov) {
+      ov.addEventListener('mousedown', function (e) { ov.dataset.md = e.target === ov ? '1' : '0'; });
+      ov.addEventListener('mouseup', function (e) { if (e.target === ov && ov.dataset.md === '1') closeDetailModal(); ov.dataset.md = '0'; });
+    }
+  })();
+
+  window.clearDetails = async function () {
+    if (!confirm('确定清空所有请求详情记录？此操作不可恢复。')) return;
+    try {
+      await api('DELETE', '/api/admin/request-details');
+      toast('已清空所有请求详情', 'success');
+      loadDetails(0);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+
+  function detailItem(label, value) {
+    return '<div class="detail-grid-item"><span class="detail-grid-label">' + escHtml(label) + '</span><span class="detail-grid-value">' + escHtml(value || '-') + '</span></div>';
+  }
+
+  function truncText(s, max) {
+    if (!s) return '';
+    if (s.length <= max) return s;
+    return s.substring(0, max) + '...';
+  }
+
+  // 长文本截断阈值
+  var MAX_LINES_TO_SHOW = 5;
+  var MAX_JSON_FORMAT_LENGTH = 50000; // 超过 50KB 的文本跳过 JSON 格式化
+  // 当前详情弹窗的元数据（用于下载命名）
+  var _detailMeta = { backend: '', model: '', time: '' };
+
+  function tryFormatJSON(s) {
+    if (!s) return '';
+    if (s.length > MAX_JSON_FORMAT_LENGTH) return s;
+    try { return JSON.stringify(JSON.parse(s), null, 2); } catch (e) { return s; }
+  }
+
+  /**
+   * 将长文本截断为指定行数，返回 { above, remaining, full }
+   */
+  function truncateLines(text, maxLines) {
+    if (!text) return { above: '', remaining: 0, full: '' };
+    var lines = text.split('\n');
+    var total = lines.length;
+    if (total <= maxLines + 1) {
+      return { above: text, remaining: 0, full: text };
+    }
+    var above = lines.slice(0, maxLines).join('\n');
+    return { above: above, remaining: total - maxLines, full: text };
+  }
+
+  /**
+   * 生成下载文件名：渠道_模型_时间戳_段名.txt
+   */
+  function makeDownloadName(sectionLabel) {
+    var b = (_detailMeta.backend || 'unknown').replace(/[\\/:*?"<>|]/g, '_');
+    var m = (_detailMeta.model || 'unknown').replace(/[\\/:*?"<>|]/g, '_');
+    var t = (_detailMeta.time || new Date().toISOString()).replace(/[:\\s]/g, '-').replace(/\.\d+Z?$/, '');
+    var s = (sectionLabel || 'data').replace(/[\\/:*?"<>|\s]/g, '_');
+    return b + '_' + m + '_' + t + '_' + s + '.txt';
+  }
+
+  /**
+   * 下载文本为文件
+   */
+  function downloadText(text, filename) {
+    var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 200);
+  }
+
+  /**
+   * 渲染可截断的 <pre> 代码块
+   * 折叠时显示前 N 行 + 折叠提示
+   * 展开后显示完整内容（不折断，可横向滚动）
+   * 每个区段带下载按钮
+   */
+  function renderTruncatedPre(text, sectionLabel, extraClass) {
+    if (!text) return '';
+    var cls = 'detail-code detail-code-nowrap' + (extraClass ? ' ' + extraClass : '');
+    var uid = 'tc-' + Math.random().toString(36).slice(2, 10);
+    var info = truncateLines(text, MAX_LINES_TO_SHOW);
+
+    // 下载按钮（始终显示）
+    var dlBtn = '<button class="btn btn-sm btn-outline detail-dl-btn" '
+      + 'onclick="downloadSection(\'' + uid + '\', \'' + escHtml(sectionLabel || '') + '\')" title="下载此段内容">'
+      + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
+      + '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>'
+      + '<line x1="12" y1="15" x2="12" y2="3"/></svg>'
+      + '<span>下载</span></button>';
+
+    if (info.remaining <= 0) {
+      // 内容不长，直接全部显示 + 下载按钮
+      return '<div class="detail-truncated" id="' + uid + '">'
+        + '<pre class="' + cls + '">' + escHtml(info.full) + '</pre>'
+        + '<div class="detail-action-bar">' + dlBtn + '</div>'
+        + '</div>';
+    }
+
+    // 折叠 + 展开
+    return '<div class="detail-truncated" id="' + uid + '">'
+      + '<pre class="' + cls + ' detail-code-collapsed" data-uid="' + uid + '">' + escHtml(info.above) + '</pre>'
+      + '<div class="detail-expand-bar" onclick="expandTruncated(\'' + uid + '\')">'
+      +   '<span class="detail-expand-hint">… 还有 ' + info.remaining + ' 行</span>'
+      +   '<button class="btn btn-sm btn-outline detail-expand-btn">展开全部</button>'
+      + '</div>'
+      + '<pre class="' + cls + ' detail-code-full hidden">' + escHtml(info.full) + '</pre>'
+      + '<div class="detail-action-bar">'
+      +   '<button class="btn btn-sm btn-ghost detail-collapse-btn hidden" onclick="collapseTruncated(\'' + uid + '\')">'
+      +     '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>'
+      +     '<span>收起</span></button>'
+      +   dlBtn
+      + '</div>'
+      + '</div>';
+  }
+
+  window.expandTruncated = function (uid) {
+    var wrap = document.getElementById(uid);
+    if (!wrap) return;
+    var collapsed = wrap.querySelector('.detail-code-collapsed');
+    var full = wrap.querySelector('.detail-code-full');
+    var bar = wrap.querySelector('.detail-expand-bar');
+    var collapseBtn = wrap.querySelector('.detail-collapse-btn');
+    if (collapsed) collapsed.classList.add('hidden');
+    if (bar) bar.classList.add('hidden');
+    if (full) full.classList.remove('hidden');
+    if (collapseBtn) collapseBtn.classList.remove('hidden');
+  };
+
+  window.collapseTruncated = function (uid) {
+    var wrap = document.getElementById(uid);
+    if (!wrap) return;
+    var collapsed = wrap.querySelector('.detail-code-collapsed');
+    var full = wrap.querySelector('.detail-code-full');
+    var bar = wrap.querySelector('.detail-expand-bar');
+    var collapseBtn = wrap.querySelector('.detail-collapse-btn');
+    if (collapsed) collapsed.classList.remove('hidden');
+    if (bar) bar.classList.remove('hidden');
+    if (full) full.classList.add('hidden');
+    if (collapseBtn) collapseBtn.classList.add('hidden');
+  };
+
+  window.downloadSection = function (uid, sectionLabel) {
+    var wrap = document.getElementById(uid);
+    if (!wrap) return;
+    // 取完整内容（优先从 full 块取，兜底从 collapsed 或唯一 pre 取）
+    var fullPre = wrap.querySelector('.detail-code-full');
+    var pre = fullPre || wrap.querySelector('pre');
+    if (!pre) return;
+    var text = pre.textContent || '';
+    downloadText(text, makeDownloadName(sectionLabel));
+    toast('已下载 ' + (sectionLabel || '内容'), 'success');
+  };
+
   // ── Modal ──
 
   var modalState = { type: '', editId: null };
@@ -689,7 +992,13 @@
 
   // Close modal on Escape
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && !$modalOv.classList.contains('hidden')) closeModal();
+    if (e.key === 'Escape') {
+      if (!document.getElementById('detail-modal-overlay').classList.contains('hidden')) {
+        closeDetailModal();
+      } else if (!$modalOv.classList.contains('hidden')) {
+        closeModal();
+      }
+    }
   });
 
   // ── Login：文本解密动画 ──

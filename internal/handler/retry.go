@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/hoshino-nyan/A2esr/internal/adapter"
@@ -15,6 +17,39 @@ import (
 )
 
 const defaultMaxRetries = 2
+
+// retryDelay 计算重试延迟：指数退避 + 抖动 + Retry-After 头尊重
+func retryDelay(attempt int, err error) time.Duration {
+	const baseDelay = 500 * time.Millisecond
+	const maxDelay = 8 * time.Second
+
+	// 尊重上游 Retry-After 头
+	if ue, ok := err.(*proxy.UpstreamError); ok && ue.RetryAfter > 0 {
+		ra := ue.RetryAfter
+		if ra > maxDelay {
+			ra = maxDelay
+		}
+		if ra < baseDelay {
+			ra = baseDelay
+		}
+		// 加 ±25% 抖动，防止惊群效应
+		jitter := time.Duration(float64(ra) * 0.25 * (2*rand.Float64() - 1))
+		return ra + jitter
+	}
+
+	// 指数退避: baseDelay * 2^(attempt-1)
+	delay := baseDelay
+	for i := 1; i < attempt; i++ {
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+			break
+		}
+	}
+	// ±25% 抖动
+	jitter := time.Duration(float64(delay) * 0.25 * (2*rand.Float64() - 1))
+	return delay + jitter
+}
 
 func isRetryableError(err error) bool {
 	if ue, ok := err.(*proxy.UpstreamError); ok {
@@ -49,14 +84,39 @@ func findAlternateContext(clientModel, route, allowedChannelIDs string, excludeI
 	}
 }
 
+// JSON 编码缓冲池：避免每次 deepCopy 分配新 buffer
+var jsonBufPool = sync.Pool{
+	New: func() interface{} {
+		return bytes.NewBuffer(make([]byte, 0, 4096))
+	},
+}
+
 func deepCopyPayload(payload J) J {
-	b, _ := json.Marshal(payload)
+	buf := jsonBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer jsonBufPool.Put(buf)
+
+	enc := json.NewEncoder(buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(payload); err != nil {
+		// fallback
+		b, _ := json.Marshal(payload)
+		var cp J
+		json.Unmarshal(b, &cp)
+		return cp
+	}
 	var cp J
-	json.Unmarshal(b, &cp)
+	json.NewDecoder(buf).Decode(&cp)
 	return cp
 }
 
 // ─── Non-Streaming Retry (ResponseBuffer) ─────
+
+var responseBufferPool = sync.Pool{
+	New: func() interface{} {
+		return &responseBuffer{headers: make(http.Header)}
+	},
+}
 
 type responseBuffer struct {
 	code    int
@@ -65,7 +125,19 @@ type responseBuffer struct {
 }
 
 func newResponseBuffer() *responseBuffer {
-	return &responseBuffer{headers: make(http.Header)}
+	buf := responseBufferPool.Get().(*responseBuffer)
+	buf.code = 0
+	buf.body.Reset()
+	for k := range buf.headers {
+		delete(buf.headers, k)
+	}
+	return buf
+}
+
+func recycleResponseBuffer(buf *responseBuffer) {
+	if buf != nil {
+		responseBufferPool.Put(buf)
+	}
 }
 
 func (b *responseBuffer) Header() http.Header     { return b.headers }
@@ -153,6 +225,9 @@ func forwardStreamWithRetry(ctx *models.RouteContext, payload J, clientModel, ro
 
 	for attempt := 0; attempt <= defaultMaxRetries; attempt++ {
 		if attempt > 0 {
+			// 指数退避等待
+			time.Sleep(retryDelay(attempt, lastErr))
+
 			newCtx := findAlternateContext(clientModel, route, ctx.AllowedChannelIDs, excludeIDs, true)
 			if newCtx == nil {
 				break

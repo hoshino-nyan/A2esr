@@ -94,6 +94,27 @@ type RequestLog struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+// RequestDetail 完整请求详情记录（最多保留200条）
+type RequestDetail struct {
+	ID             int64     `json:"id"`
+	RequestLogID   int64     `json:"request_log_id"`
+	RequestHeaders string    `json:"request_headers"` // JSON 格式的请求头
+	RequestBody    string    `json:"request_body"`    // 原始请求体
+	Prompt         string    `json:"prompt"`          // 提取的提示词/用户消息
+	UserMessage    string    `json:"user_message"`    // 用户发送的内容摘要
+	AIResponse     string    `json:"ai_response"`    // AI 生成的响应摘要
+	ToolCalls      string    `json:"tool_calls"`      // 工具调用信息 JSON
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// RequestCapture 用于暂存请求详情
+type RequestCapture struct {
+	Headers     string // JSON 格式的请求头
+	Body        string // 原始请求体
+	Prompt      string // 提取的提示词/系统消息
+	UserMessage string // 用户发送的内容摘要
+}
+
 type RouteContext struct {
 	ClientModel          string
 	UpstreamModel        string
@@ -111,4 +132,5 @@ type RouteContext struct {
 	BodyModifications    map[string]interface{}
 	HeaderModifications  map[string]interface{}
 	Timeout              int
+	Capture              *RequestCapture // 请求详情捕获
 }

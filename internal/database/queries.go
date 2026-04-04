@@ -30,6 +30,11 @@ func GetUsers() ([]models.User, error) {
 }
 
 func GetUserByID(id int64) (*models.User, error) {
+	return getCachedUserByID(id)
+}
+
+// getUserByIDFromDB 直接从数据库查询（内部使用）
+func getUserByIDFromDB(id int64) (*models.User, error) {
 	u := &models.User{}
 	err := db.QueryRow("SELECT id, username, password, role, status, qpm, created_at, updated_at FROM users WHERE id=?", id).
 		Scan(&u.ID, &u.Username, &u.Password, &u.Role, &u.Status, &u.QPM, &u.CreatedAt, &u.UpdatedAt)
@@ -60,11 +65,13 @@ func UpdateUser(u *models.User) error {
 		"UPDATE users SET username=?, password=?, role=?, status=?, qpm=?, updated_at=? WHERE id=?",
 		u.Username, u.Password, u.Role, u.Status, u.QPM, u.UpdatedAt, u.ID,
 	)
+	invalidateUserCache()
 	return err
 }
 
 func DeleteUser(id int64) error {
 	_, err := db.Exec("DELETE FROM users WHERE id=?", id)
+	invalidateUserCache()
 	return err
 }
 
@@ -142,6 +149,11 @@ func GetAPIKeysByUser(userID int64) ([]models.APIKey, error) {
 }
 
 func GetAPIKeyByKey(key string) (*models.APIKey, error) {
+	return getCachedAPIKeyByKey(key)
+}
+
+// getAPIKeyByKeyFromDB 直接从数据库查询（内部使用）
+func getAPIKeyByKeyFromDB(key string) (*models.APIKey, error) {
 	k := &models.APIKey{}
 	err := db.QueryRow("SELECT id, user_id, key, name, remark, status, qpm, channel_ids, created_at, updated_at FROM api_keys WHERE key=?", key).
 		Scan(&k.ID, &k.UserID, &k.Key, &k.Name, &k.Remark, &k.Status, &k.QPM, &k.ChannelIDs, &k.CreatedAt, &k.UpdatedAt)
@@ -163,6 +175,7 @@ func CreateAPIKey(k *models.APIKey) error {
 	k.ID, _ = res.LastInsertId()
 	k.CreatedAt = now
 	k.UpdatedAt = now
+	invalidateAPIKeyCache()
 	return nil
 }
 
@@ -172,17 +185,24 @@ func UpdateAPIKey(k *models.APIKey) error {
 		"UPDATE api_keys SET user_id=?, key=?, name=?, remark=?, status=?, qpm=?, channel_ids=?, updated_at=? WHERE id=?",
 		k.UserID, k.Key, k.Name, k.Remark, k.Status, k.QPM, k.ChannelIDs, k.UpdatedAt, k.ID,
 	)
+	invalidateAPIKeyCache()
 	return err
 }
 
 func DeleteAPIKey(id int64) error {
 	_, err := db.Exec("DELETE FROM api_keys WHERE id=?", id)
+	invalidateAPIKeyCache()
 	return err
 }
 
 // ─── Channels ──────────────────────────────────
 
 func GetChannels() ([]models.Channel, error) {
+	return getCachedChannels()
+}
+
+// getChannelsFromDB 直接从数据库查询渠道（内部使用）
+func getChannelsFromDB() ([]models.Channel, error) {
 	rows, err := db.Query(`SELECT id, name, type, base_url, api_key, models, status, priority, weight,
 		qpm, timeout, max_retry, custom_instructions, instructions_position, body_modifications,
 		header_modifications, used_count, fail_count, input_tokens, output_tokens, created_at, updated_at
@@ -204,6 +224,11 @@ func GetChannels() ([]models.Channel, error) {
 		channels = append(channels, c)
 	}
 	return channels, nil
+}
+
+// GetChannelsUncached 直接从数据库查询（管理面板需要实时数据）
+func GetChannelsUncached() ([]models.Channel, error) {
+	return getChannelsFromDB()
 }
 
 func GetChannelByID(id int64) (*models.Channel, error) {
@@ -238,6 +263,7 @@ func CreateChannel(c *models.Channel) error {
 	c.ID, _ = res.LastInsertId()
 	c.CreatedAt = now
 	c.UpdatedAt = now
+	invalidateChannelCache()
 	return nil
 }
 
@@ -250,28 +276,28 @@ func UpdateChannel(c *models.Channel) error {
 		c.QPM, c.Timeout, c.MaxRetry, c.CustomInstructions, c.InstructionsPosition,
 		c.BodyModifications, c.HeaderModifications, c.UpdatedAt, c.ID,
 	)
+	invalidateChannelCache()
 	return err
 }
 
 func DeleteChannel(id int64) error {
 	_, err := db.Exec("DELETE FROM channels WHERE id=?", id)
+	invalidateChannelCache()
 	return err
 }
 
 func IncrChannelUsage(channelID int64, inputTokens, outputTokens int, failed bool) {
-	failInc := 0
-	if failed {
-		failInc = 1
-	}
-	_, _ = db.Exec(
-		"UPDATE channels SET used_count=used_count+1, fail_count=fail_count+?, input_tokens=input_tokens+?, output_tokens=output_tokens+? WHERE id=?",
-		failInc, inputTokens, outputTokens, channelID,
-	)
+	IncrChannelUsageBatched(channelID, inputTokens, outputTokens, failed)
 }
 
 // ─── Model Mappings ──────────────────────────────
 
 func GetModelMappings() ([]models.ModelMapping, error) {
+	return getCachedModelMappings()
+}
+
+// getModelMappingsFromDB 直接从数据库查询（内部使用）
+func getModelMappingsFromDB() ([]models.ModelMapping, error) {
 	rows, err := db.Query("SELECT id, name, description, route, priority, client_model, upstream_model, channel_ids, status, created_at, updated_at FROM model_mappings ORDER BY priority DESC, id")
 	if err != nil {
 		return nil, err
@@ -291,6 +317,11 @@ func GetModelMappings() ([]models.ModelMapping, error) {
 	return mappings, nil
 }
 
+// GetModelMappingsUncached 直接从数据库查询（管理面板需要实时数据）
+func GetModelMappingsUncached() ([]models.ModelMapping, error) {
+	return getModelMappingsFromDB()
+}
+
 func CreateModelMapping(m *models.ModelMapping) error {
 	now := time.Now()
 	res, err := db.Exec(
@@ -303,6 +334,7 @@ func CreateModelMapping(m *models.ModelMapping) error {
 	m.ID, _ = res.LastInsertId()
 	m.CreatedAt = now
 	m.UpdatedAt = now
+	invalidateMappingCache()
 	return nil
 }
 
@@ -312,11 +344,13 @@ func UpdateModelMapping(m *models.ModelMapping) error {
 		"UPDATE model_mappings SET name=?, description=?, route=?, priority=?, client_model=?, upstream_model=?, channel_ids=?, status=?, updated_at=? WHERE id=?",
 		m.Name, m.Description, m.Route, m.Priority, m.ClientModel, m.UpstreamModel, m.ChannelIDs, m.Status, m.UpdatedAt, m.ID,
 	)
+	invalidateMappingCache()
 	return err
 }
 
 func DeleteModelMapping(id int64) error {
 	_, err := db.Exec("DELETE FROM model_mappings WHERE id=?", id)
+	invalidateMappingCache()
 	return err
 }
 
@@ -379,6 +413,27 @@ func InsertRequestLog(l *models.RequestLog) error {
 		l.Status, l.ErrorMsg, l.ClientIP, l.CreatedAt,
 	)
 	return err
+}
+
+// InsertRequestLogReturnID 插入日志并返回 ID
+func InsertRequestLogReturnID(l *models.RequestLog) int64 {
+	streamInt := 0
+	if l.Stream {
+		streamInt = 1
+	}
+	res, err := db.Exec(
+		`INSERT INTO request_logs (user_id, api_key_id, channel_id, client_model, upstream_model,
+		route, backend, stream, input_tokens, output_tokens, duration_ms, status, error_msg, client_ip, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		l.UserID, l.APIKeyID, l.ChannelID, l.ClientModel, l.UpstreamModel,
+		l.Route, l.Backend, streamInt, l.InputTokens, l.OutputTokens, l.Duration,
+		l.Status, l.ErrorMsg, l.ClientIP, l.CreatedAt,
+	)
+	if err != nil {
+		return 0
+	}
+	id, _ := res.LastInsertId()
+	return id
 }
 
 func GetRequestLogStats() (map[string]interface{}, error) {
@@ -701,4 +756,162 @@ func ParseJSONMap(s string) map[string]interface{} {
 		return nil
 	}
 	return m
+}
+
+// ─── Request Details (FIFO 200) ──────────────────
+
+const maxRequestDetails = 200
+
+// InsertRequestDetail 插入请求详情，自动维护最多200条
+func InsertRequestDetail(d *models.RequestDetail) error {
+	d.CreatedAt = time.Now()
+	_, err := db.Exec(
+		`INSERT INTO request_details (request_log_id, request_headers, request_body, prompt, user_message, ai_response, tool_calls, created_at)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		d.RequestLogID, d.RequestHeaders, d.RequestBody, d.Prompt, d.UserMessage, d.AIResponse, d.ToolCalls, d.CreatedAt,
+	)
+	if err != nil {
+		return err
+	}
+	// 删除超出200条的旧记录
+	_, _ = db.Exec(`DELETE FROM request_details WHERE id NOT IN (SELECT id FROM request_details ORDER BY id DESC LIMIT ?)`, maxRequestDetails)
+	return nil
+}
+
+// GetRequestDetails 获取请求详情列表（最新在前）
+func GetRequestDetails(limit, offset int) ([]map[string]interface{}, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := db.Query(`
+		SELECT d.id, d.request_log_id, d.request_headers, d.request_body, d.prompt,
+			d.user_message, d.ai_response, d.tool_calls, d.created_at,
+			COALESCE(l.client_model, '') as client_model,
+			COALESCE(l.upstream_model, '') as upstream_model,
+			COALESCE(l.route, '') as route,
+			COALESCE(l.backend, '') as backend,
+			COALESCE(l.stream, 0) as stream,
+			COALESCE(l.input_tokens, 0) as input_tokens,
+			COALESCE(l.output_tokens, 0) as output_tokens,
+			COALESCE(l.duration_ms, 0) as duration_ms,
+			COALESCE(l.status, '') as status,
+			COALESCE(l.error_msg, '') as error_msg,
+			COALESCE(l.client_ip, '') as client_ip
+		FROM request_details d
+		LEFT JOIN request_logs l ON d.request_log_id = l.id
+		ORDER BY d.id DESC
+		LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []map[string]interface{}
+	for rows.Next() {
+		var (
+			id, logID                                                                  int64
+			headers, body, prompt, userMsg, aiResp, toolCalls                          string
+			createdAt                                                                  time.Time
+			clientModel, upstreamModel, route, backend, status, errorMsg, clientIP     string
+			stream, inputTokens, outputTokens, durationMs                              int
+		)
+		if err := rows.Scan(&id, &logID, &headers, &body, &prompt, &userMsg, &aiResp, &toolCalls, &createdAt,
+			&clientModel, &upstreamModel, &route, &backend, &stream, &inputTokens, &outputTokens, &durationMs, &status, &errorMsg, &clientIP); err != nil {
+			return nil, err
+		}
+		results = append(results, map[string]interface{}{
+			"id":              id,
+			"request_log_id":  logID,
+			"request_headers": headers,
+			"request_body":    body,
+			"prompt":          prompt,
+			"user_message":    userMsg,
+			"ai_response":     aiResp,
+			"tool_calls":      toolCalls,
+			"created_at":      createdAt,
+			"client_model":    clientModel,
+			"upstream_model":  upstreamModel,
+			"route":           route,
+			"backend":         backend,
+			"stream":          stream == 1,
+			"input_tokens":    inputTokens,
+			"output_tokens":   outputTokens,
+			"duration_ms":     durationMs,
+			"status":          status,
+			"error_msg":       errorMsg,
+			"client_ip":       clientIP,
+		})
+	}
+	return results, nil
+}
+
+// GetRequestDetailByID 获取单条请求详情
+func GetRequestDetailByID(id int64) (map[string]interface{}, error) {
+	var (
+		did, logID                                                                 int64
+		headers, body, prompt, userMsg, aiResp, toolCalls                          string
+		createdAt                                                                  time.Time
+		clientModel, upstreamModel, route, backend, status, errorMsg, clientIP     string
+		stream, inputTokens, outputTokens, durationMs                              int
+	)
+	err := db.QueryRow(`
+		SELECT d.id, d.request_log_id, d.request_headers, d.request_body, d.prompt,
+			d.user_message, d.ai_response, d.tool_calls, d.created_at,
+			COALESCE(l.client_model, '') as client_model,
+			COALESCE(l.upstream_model, '') as upstream_model,
+			COALESCE(l.route, '') as route,
+			COALESCE(l.backend, '') as backend,
+			COALESCE(l.stream, 0) as stream,
+			COALESCE(l.input_tokens, 0) as input_tokens,
+			COALESCE(l.output_tokens, 0) as output_tokens,
+			COALESCE(l.duration_ms, 0) as duration_ms,
+			COALESCE(l.status, '') as status,
+			COALESCE(l.error_msg, '') as error_msg,
+			COALESCE(l.client_ip, '') as client_ip
+		FROM request_details d
+		LEFT JOIN request_logs l ON d.request_log_id = l.id
+		WHERE d.id = ?`, id).
+		Scan(&did, &logID, &headers, &body, &prompt, &userMsg, &aiResp, &toolCalls, &createdAt,
+			&clientModel, &upstreamModel, &route, &backend, &stream, &inputTokens, &outputTokens, &durationMs, &status, &errorMsg, &clientIP)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"id":              did,
+		"request_log_id":  logID,
+		"request_headers": headers,
+		"request_body":    body,
+		"prompt":          prompt,
+		"user_message":    userMsg,
+		"ai_response":     aiResp,
+		"tool_calls":      toolCalls,
+		"created_at":      createdAt,
+		"client_model":    clientModel,
+		"upstream_model":  upstreamModel,
+		"route":           route,
+		"backend":         backend,
+		"stream":          stream == 1,
+		"input_tokens":    inputTokens,
+		"output_tokens":   outputTokens,
+		"duration_ms":     durationMs,
+		"status":          status,
+		"error_msg":       errorMsg,
+		"client_ip":       clientIP,
+	}, nil
+}
+
+// GetRequestDetailCount 获取请求详情总数
+func GetRequestDetailCount() (int64, error) {
+	var count int64
+	err := db.QueryRow("SELECT COUNT(*) FROM request_details").Scan(&count)
+	return count, err
+}
+
+// ClearRequestDetails 清空所有请求详情
+func ClearRequestDetails() error {
+	_, err := db.Exec("DELETE FROM request_details")
+	return err
 }

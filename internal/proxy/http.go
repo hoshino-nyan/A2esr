@@ -9,10 +9,54 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hoshino-nyan/A2esr/internal/models"
 )
+
+// ─── 全局 HTTP 连接池 ──────────────────────────
+// 按超时分桶复用 http.Client，避免每次请求新建连接
+var (
+	clientPool   = make(map[int]*http.Client)
+	clientPoolMu sync.RWMutex
+
+	// 默认 Transport：连接池化、keepAlive
+	defaultTransport = &http.Transport{
+		MaxIdleConns:        200,
+		MaxIdleConnsPerHost: 50,
+		IdleConnTimeout:     120 * time.Second,
+		DisableKeepAlives:   false,
+		ForceAttemptHTTP2:   true,
+	}
+)
+
+// getPooledClient 按超时值获取共享的 http.Client（连接池复用）
+func getPooledClient(timeoutSec int) *http.Client {
+	if timeoutSec <= 0 {
+		timeoutSec = 300
+	}
+
+	clientPoolMu.RLock()
+	c, ok := clientPool[timeoutSec]
+	clientPoolMu.RUnlock()
+	if ok {
+		return c
+	}
+
+	clientPoolMu.Lock()
+	defer clientPoolMu.Unlock()
+	// 双重检查
+	if c, ok = clientPool[timeoutSec]; ok {
+		return c
+	}
+	c = &http.Client{
+		Timeout:   time.Duration(timeoutSec) * time.Second,
+		Transport: defaultTransport,
+	}
+	clientPool[timeoutSec] = c
+	return c
+}
 
 func GenID(prefix string) string {
 	return fmt.Sprintf("%s%x", prefix, time.Now().UnixNano())
@@ -118,7 +162,7 @@ func ForwardRequest(url string, headers map[string]string, payload interface{}, 
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: time.Duration(timeout) * time.Second}
+	client := getPooledClient(timeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("upstream request: %w", err)
@@ -132,6 +176,7 @@ func ForwardRequest(url string, headers map[string]string, payload interface{}, 
 			StatusCode: resp.StatusCode,
 			Body:       respBody,
 			Header:     resp.Header,
+			RetryAfter: ParseRetryAfter(resp.Header),
 		}
 	}
 	return resp, nil
@@ -141,6 +186,7 @@ type UpstreamError struct {
 	StatusCode int
 	Body       []byte
 	Header     http.Header
+	RetryAfter time.Duration // 从 Retry-After 头解析
 }
 
 func (e *UpstreamError) Error() string {
@@ -162,6 +208,27 @@ func (e *UpstreamError) IsRetryable() bool {
 	return false
 }
 
+// ParseRetryAfter 从响应头提取 Retry-After 值
+func ParseRetryAfter(h http.Header) time.Duration {
+	ra := h.Get("Retry-After")
+	if ra == "" {
+		return 0
+	}
+	// 尝试秒数
+	var secs int
+	if _, err := fmt.Sscanf(ra, "%d", &secs); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	// 尝试 HTTP-date
+	if t, err := http.ParseTime(ra); err == nil {
+		d := time.Until(t)
+		if d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
 // ─── SSE Helpers ──────────────────────────────
 
 func SSEResponse(w http.ResponseWriter, generator func(w *SSEWriter)) {
@@ -176,13 +243,14 @@ func SSEResponse(w http.ResponseWriter, generator func(w *SSEWriter)) {
 		return
 	}
 
-	sw := &SSEWriter{w: w, f: flusher}
+	sw := &SSEWriter{w: w, f: flusher, buf: bufio.NewWriterSize(w, 4096)}
 	generator(sw)
 }
 
 type SSEWriter struct {
-	w http.ResponseWriter
-	f http.Flusher
+	w   http.ResponseWriter
+	f   http.Flusher
+	buf *bufio.Writer
 }
 
 func (s *SSEWriter) WriteData(data interface{}) {
@@ -194,7 +262,8 @@ func (s *SSEWriter) WriteData(data interface{}) {
 		b, _ := json.Marshal(data)
 		payload = string(b)
 	}
-	fmt.Fprintf(s.w, "data: %s\n\n", payload)
+	fmt.Fprintf(s.buf, "data: %s\n\n", payload)
+	s.buf.Flush()
 	s.f.Flush()
 }
 
@@ -207,17 +276,20 @@ func (s *SSEWriter) WriteEvent(eventType string, data interface{}) {
 		b, _ := json.Marshal(data)
 		payload = string(b)
 	}
-	fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", eventType, payload)
+	fmt.Fprintf(s.buf, "event: %s\ndata: %s\n\n", eventType, payload)
+	s.buf.Flush()
 	s.f.Flush()
 }
 
 func (s *SSEWriter) WriteDone() {
-	fmt.Fprintf(s.w, "data: [DONE]\n\n")
+	fmt.Fprintf(s.buf, "data: [DONE]\n\n")
+	s.buf.Flush()
 	s.f.Flush()
 }
 
 func (s *SSEWriter) WriteRaw(raw string) {
-	fmt.Fprint(s.w, raw)
+	fmt.Fprint(s.buf, raw)
+	s.buf.Flush()
 	s.f.Flush()
 }
 

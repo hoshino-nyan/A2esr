@@ -251,7 +251,7 @@ func DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 // ─── Channels CRUD ──────────────────────────
 
 func ListChannels(w http.ResponseWriter, r *http.Request) {
-	channels, err := database.GetChannels()
+	channels, err := database.GetChannelsUncached()
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -315,7 +315,7 @@ func DeleteChannel(w http.ResponseWriter, r *http.Request) {
 // ─── Model Mappings CRUD ──────────────────────
 
 func ListModelMappings(w http.ResponseWriter, r *http.Request) {
-	mappings, err := database.GetModelMappings()
+	mappings, err := database.GetModelMappingsUncached()
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -496,6 +496,54 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, J{"error": msg})
 }
 
+// ─── Request Details ──────────────────────────
+
+func ListRequestDetails(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	if limit <= 0 {
+		limit = 50
+	}
+	details, err := database.GetRequestDetails(limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "查询请求详情失败: "+err.Error())
+		return
+	}
+	count, _ := database.GetRequestDetailCount()
+	writeJSON(w, http.StatusOK, J{"data": details, "total": count})
+}
+
+func GetRequestDetail(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/admin/request-details/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeError(w, http.StatusBadRequest, "缺少 ID")
+		return
+	}
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "无效 ID")
+		return
+	}
+	detail, err := database.GetRequestDetailByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "查询失败: "+err.Error())
+		return
+	}
+	if detail == nil {
+		writeError(w, http.StatusNotFound, "记录不存在")
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func ClearRequestDetails(w http.ResponseWriter, r *http.Request) {
+	if err := database.ClearRequestDetails(); err != nil {
+		writeError(w, http.StatusInternalServerError, "清空失败: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, J{"message": "已清空所有请求详情"})
+}
+
 func RegisterAdminRoutes(mux *http.ServeMux, authMw func(http.Handler) http.Handler) {
 	wrap := func(handler http.HandlerFunc) http.Handler {
 		return authMw(http.HandlerFunc(handler))
@@ -591,6 +639,23 @@ func RegisterAdminRoutes(mux *http.ServeMux, authMw func(http.Handler) http.Hand
 		}
 	}))
 	mux.Handle("/api/admin/stats", wrap(GetStats))
+	mux.Handle("/api/admin/request-details", wrap(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			ListRequestDetails(w, r)
+		case "DELETE":
+			ClearRequestDetails(w, r)
+		default:
+			http.Error(w, "method not allowed", 405)
+		}
+	}))
+	mux.Handle("/api/admin/request-details/", wrap(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			GetRequestDetail(w, r)
+			return
+		}
+		http.Error(w, "method not allowed", 405)
+	}))
 	mux.HandleFunc("/v1/models", ListModels)
 
 	staticDir := fmt.Sprintf("%s", "static")

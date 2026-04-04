@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -18,16 +19,31 @@ import (
 
 type J = map[string]interface{}
 
+// 请求体最大限制 32MB（防止超大请求耗尽内存）
+const maxRequestBodySize = 32 * 1024 * 1024
+
 func ChatCompletions(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "读取请求失败", "invalid_request")
+		return
+	}
+	if len(body) >= maxRequestBodySize {
+		writeError(w, http.StatusRequestEntityTooLarge, "请求体超过大小限制", "invalid_request")
 		return
 	}
 	var payload J
 	if err := json.Unmarshal(body, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, "JSON 解析失败", "invalid_request")
 		return
+	}
+
+	// 捕获请求信息
+	capture := &models.RequestCapture{
+		Headers:     marshalHeaders(r),
+		Body:        string(body),
+		Prompt:      extractSystemPrompt(payload),
+		UserMessage: extractLastUserMessage(payload),
 	}
 
 	clientModel := str(payload["model"])
@@ -73,6 +89,8 @@ func ChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	dbg("聊天补全", "模型=%s 上游=%s 后端=%s 流式=%v 渠道=%d", clientModel, ctx.UpstreamModel, ctx.Backend, isStream, ctx.ChannelID)
 
+	ctx.Capture = capture
+
 	if msgs := adapter.ToSlicePublic(payload["messages"]); len(msgs) == 0 && payload["input"] != nil {
 		payload = adapter.ResponsesToCC(payload)
 	}
@@ -87,9 +105,13 @@ func ChatCompletions(w http.ResponseWriter, r *http.Request) {
 func dispatchCCNonStreamWithRetry(w http.ResponseWriter, ctx *models.RouteContext, payload J, clientModel string, start time.Time) {
 	excludeIDs := []int64{}
 	var lastBuf *responseBuffer
+	var lastErr error
 
 	for attempt := 0; attempt <= defaultMaxRetries; attempt++ {
 		if attempt > 0 {
+			// 指数退避等待
+			time.Sleep(retryDelay(attempt, lastErr))
+
 			newCtx := findAlternateContext(clientModel, "chat", ctx.AllowedChannelIDs, excludeIDs, false)
 			if newCtx == nil {
 				break
@@ -113,16 +135,21 @@ func dispatchCCNonStreamWithRetry(w http.ResponseWriter, ctx *models.RouteContex
 			handleAnthropicBackend(buf, ctx, workPayload, start)
 		}
 
+		if lastBuf != nil {
+			recycleResponseBuffer(lastBuf)
+		}
 		lastBuf = buf
 		if !buf.isRetryable() {
 			break
 		}
+		lastErr = fmt.Errorf("status %d", buf.code)
 		excludeIDs = append(excludeIDs, ctx.ChannelID)
 		dbg("重试", "渠道=%d 返回 %d，尝试切换", ctx.ChannelID, buf.code)
 	}
 
 	if lastBuf != nil {
 		lastBuf.writeTo(w)
+		recycleResponseBuffer(lastBuf)
 	}
 }
 
@@ -499,7 +526,7 @@ func logStreamDone(ctx *models.RouteContext, lastUsage J, start time.Time) {
 
 func recordLog(ctx *models.RouteContext, inp, outp int, dur int64, status, errMsg string) {
 	go func() {
-		_ = database.InsertRequestLog(&models.RequestLog{
+		logEntry := &models.RequestLog{
 			UserID:        ctx.UserID,
 			APIKeyID:      ctx.APIKeyID,
 			ChannelID:     ctx.ChannelID,
@@ -515,7 +542,17 @@ func recordLog(ctx *models.RouteContext, inp, outp int, dur int64, status, errMs
 			ErrorMsg:      errMsg,
 			ClientIP:      ctx.ClientIP,
 			CreatedAt:     time.Now(),
-		})
+		}
+		logID := database.InsertRequestLogReturnID(logEntry)
+		if logID > 0 && ctx.Capture != nil {
+			_ = database.InsertRequestDetail(&models.RequestDetail{
+				RequestLogID:   logID,
+				RequestHeaders: ctx.Capture.Headers,
+				RequestBody:    ctx.Capture.Body,
+				Prompt:         ctx.Capture.Prompt,
+				UserMessage:    ctx.Capture.UserMessage,
+			})
+		}
 	}()
 }
 
@@ -548,9 +585,7 @@ func dbg(tag, format string, args ...interface{}) {
 
 // extractClientIP 从请求中提取客户端真实 IP
 func extractClientIP(r *http.Request) string {
-	// 优先从代理头获取
 	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
-		// X-Forwarded-For 可能是逗号分隔的多个 IP，取第一个
 		if idx := strings.Index(ip, ","); idx != -1 {
 			ip = ip[:idx]
 		}
@@ -559,10 +594,95 @@ func extractClientIP(r *http.Request) string {
 	if ip := r.Header.Get("X-Real-IP"); ip != "" {
 		return strings.TrimSpace(ip)
 	}
-	// 从 RemoteAddr 中去掉端口号
 	addr := r.RemoteAddr
 	if idx := strings.LastIndex(addr, ":"); idx != -1 {
 		return addr[:idx]
 	}
 	return addr
+}
+
+// ─── 请求详情捕获辅助函数 ──────────────────────────
+
+func marshalHeaders(r *http.Request) string {
+	h := make(map[string]string)
+	for k := range r.Header {
+		lk := strings.ToLower(k)
+		// 过滤敏感头
+		if lk == "authorization" || lk == "cookie" {
+			h[k] = "***"
+		} else {
+			h[k] = r.Header.Get(k)
+		}
+	}
+	h["Method"] = r.Method
+	h["URL"] = r.URL.String()
+	h["Host"] = r.Host
+	b, _ := json.Marshal(h)
+	return string(b)
+}
+
+func extractSystemPrompt(payload J) string {
+	messages := adapter.ToSlicePublic(payload["messages"])
+	for _, msg := range messages {
+		m, ok := msg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if str(m["role"]) == "system" || str(m["role"]) == "developer" {
+			return extractContentText(m["content"])
+		}
+	}
+	// responses 格式
+	if inst, ok := payload["instructions"].(string); ok && inst != "" {
+		return inst
+	}
+	return ""
+}
+
+func extractLastUserMessage(payload J) string {
+	messages := adapter.ToSlicePublic(payload["messages"])
+	lastUser := ""
+	for _, msg := range messages {
+		m, ok := msg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if str(m["role"]) == "user" {
+			lastUser = extractContentText(m["content"])
+		}
+	}
+	// responses 格式的 input
+	if lastUser == "" {
+		if input, ok := payload["input"].(string); ok && input != "" {
+			lastUser = input
+		} else if inputArr, ok := payload["input"].([]interface{}); ok {
+			for i := len(inputArr) - 1; i >= 0; i-- {
+				if item, ok := inputArr[i].(map[string]interface{}); ok && str(item["role"]) == "user" {
+					lastUser = extractContentText(item["content"])
+					break
+				}
+			}
+		}
+	}
+	return lastUser
+}
+
+func extractContentText(content interface{}) string {
+	if s, ok := content.(string); ok {
+		return s
+	}
+	if arr, ok := content.([]interface{}); ok {
+		var parts []string
+		for _, item := range arr {
+			if m, ok := item.(map[string]interface{}); ok {
+				if str(m["type"]) == "text" {
+					if t, ok := m["text"].(string); ok {
+						parts = append(parts, t)
+					}
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return ""
 }

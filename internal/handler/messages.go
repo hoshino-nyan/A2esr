@@ -14,15 +14,27 @@ import (
 )
 
 func MessagesPassthrough(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "读取请求失败", "invalid_request")
+		return
+	}
+	if len(body) >= maxRequestBodySize {
+		writeError(w, http.StatusRequestEntityTooLarge, "请求体超过大小限制", "invalid_request")
 		return
 	}
 	var payload J
 	if err := json.Unmarshal(body, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, "JSON 解析失败", "invalid_request")
 		return
+	}
+
+	// 捕获请求信息
+	capture := &models.RequestCapture{
+		Headers:     marshalHeaders(r),
+		Body:        string(body),
+		Prompt:      extractSystemPrompt(payload),
+		UserMessage: extractLastUserMessage(payload),
 	}
 
 	model := str(payload["model"])
@@ -65,6 +77,8 @@ func MessagesPassthrough(w http.ResponseWriter, r *http.Request) {
 
 	dbg("透传", "模型=%s 流式=%v", model, isStream)
 
+	ctx.Capture = capture
+
 	payload = injectInstructionsAnthropic(payload, ctx.CustomInstructions, ctx.InstructionsPosition)
 	payload = proxy.ApplyBodyModifications(payload, ctx.BodyModifications)
 
@@ -86,12 +100,21 @@ func MessagesPassthrough(w http.ResponseWriter, r *http.Request) {
 		dur := time.Since(startTime).Milliseconds()
 		go func() {
 			database.IncrChannelUsage(ctx.ChannelID, 0, 0, false)
-			_ = database.InsertRequestLog(&models.RequestLog{
+			logID := database.InsertRequestLogReturnID(&models.RequestLog{
 				UserID: ctx.UserID, APIKeyID: ctx.APIKeyID, ChannelID: ctx.ChannelID,
 				ClientModel: ctx.ClientModel, UpstreamModel: ctx.UpstreamModel,
 				Route: "messages", Backend: "anthropic", Stream: false,
 				Duration: int(dur), Status: "success", ClientIP: ctx.ClientIP, CreatedAt: time.Now(),
 			})
+			if logID > 0 && ctx.Capture != nil {
+				_ = database.InsertRequestDetail(&models.RequestDetail{
+					RequestLogID:   logID,
+					RequestHeaders: ctx.Capture.Headers,
+					RequestBody:    ctx.Capture.Body,
+					Prompt:         ctx.Capture.Prompt,
+					UserMessage:    ctx.Capture.UserMessage,
+				})
+			}
 		}()
 		writeJSON(w, http.StatusOK, data)
 		return
@@ -112,12 +135,21 @@ func MessagesPassthrough(w http.ResponseWriter, r *http.Request) {
 		dur := time.Since(startTime).Milliseconds()
 		go func() {
 			database.IncrChannelUsage(ctx.ChannelID, 0, 0, false)
-			_ = database.InsertRequestLog(&models.RequestLog{
+			logID := database.InsertRequestLogReturnID(&models.RequestLog{
 				UserID: ctx.UserID, APIKeyID: ctx.APIKeyID, ChannelID: ctx.ChannelID,
 				ClientModel: ctx.ClientModel, UpstreamModel: ctx.UpstreamModel,
 				Route: "messages", Backend: "anthropic", Stream: true,
 				Duration: int(dur), Status: "success", ClientIP: ctx.ClientIP, CreatedAt: time.Now(),
 			})
+			if logID > 0 && ctx.Capture != nil {
+				_ = database.InsertRequestDetail(&models.RequestDetail{
+					RequestLogID:   logID,
+					RequestHeaders: ctx.Capture.Headers,
+					RequestBody:    ctx.Capture.Body,
+					Prompt:         ctx.Capture.Prompt,
+					UserMessage:    ctx.Capture.UserMessage,
+				})
+			}
 		}()
 	})
 }
