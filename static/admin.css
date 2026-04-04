@@ -39,7 +39,7 @@
   --transition:200ms cubic-bezier(.4,0,.2,1);
   --sidebar-w:240px;
 }
-html{font-size:14px;scroll-behavior:smooth}
+html{font-size:14px;scroll-behavior:smooth;overflow-x:hidden}
 body{
   font-family:var(--font);
   background:var(--bg-base);
@@ -353,10 +353,6 @@ pre,
 }
 @keyframes loginSpin{to{transform:rotate(360deg)}}
 
-@media(max-width:480px){
-  .login-card{padding:32px 22px 28px;border-radius:16px}
-  .logo-orbit{width:64px;height:64px;margin-bottom:14px}
-}
 @media (prefers-reduced-motion:reduce){
   .login-shell{animation:none}
   .login-btn-spinner{animation:none;border-top-color:transparent}
@@ -458,7 +454,7 @@ pre,
 .btn-icon{padding:7px 10px;font-size:12.5px}
 
 /* ===== App Layout ===== */
-.app{display:flex;min-height:100vh}
+.app{display:flex;min-height:100vh;overflow-x:hidden}
 
 .app-bg{
   position:fixed;inset:0;z-index:-1;
@@ -562,7 +558,6 @@ pre,
 .main-content{
   flex:1;margin-left:var(--sidebar-w);
   padding:32px 40px;
-  max-width:1600px;
   min-height:100vh;
 }
 .tab-panel{display:none;animation:fadeIn .4s cubic-bezier(.22,1,.36,1)}
@@ -649,7 +644,7 @@ pre,
 }
 
 /* ===== Tables ===== */
-.table-wrap{overflow-x:auto}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .data-table{width:100%;border-collapse:collapse}
 .data-table th{
   padding:12px 18px;font-size:11.5px;font-weight:600;
@@ -812,19 +807,231 @@ pre,
 @keyframes expandFadeIn{from{opacity:0;max-height:200px}to{opacity:1;max-height:4000px}}
 
 /* ===== Responsive ===== */
-@media(max-width:860px){
-  .sidebar{transform:translateX(-100%)}
-  .sidebar.open{transform:translateX(0)}
-  .mobile-header{display:flex}
-  .main-content{margin-left:0;padding:20px 16px}
-  .stats-grid{grid-template-columns:1fr 1fr}
-  .form-row{grid-template-columns:1fr}
-  .modal{max-width:100%;margin:0 12px}
-  .page-header{flex-wrap:wrap}
+
+/* -- 2K / 超宽屏 -- */
+@media(min-width:2200px){
+  :root{--sidebar-w:280px}
+  .main-content{padding:40px 60px}
+  .stats-grid{grid-template-columns:repeat(4,1fr);gap:20px}
+  .stat-card{padding:28px;border-radius:22px}
+  .stat-card .stat-value{font-size:36px}
+  .stat-card .stat-icon{width:50px;height:50px;border-radius:14px;margin-bottom:18px;font-size:22px}
+  .stat-card .stat-label{font-size:14px}
+  .page-title{font-size:28px}
+  .page-desc{font-size:15px}
+  .data-table th{padding:14px 22px;font-size:12.5px}
+  .data-table td{padding:16px 22px;font-size:14px}
+  .sidebar-nav{padding:20px 16px;gap:6px}
+  .nav-item{padding:13px 20px;font-size:14.5px;border-radius:12px}
+  .sidebar-header{padding:28px 24px 24px}
+  .sidebar-logo{font-size:18px}
+  .detail-grid{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+  .modal{max-width:680px}
 }
+
+/* -- 2K 标准 -- */
+@media(min-width:1800px){
+  .main-content{padding:36px 52px}
+  .stats-grid{grid-template-columns:repeat(4,1fr);gap:18px}
+  .stat-card{padding:26px}
+  .stat-card .stat-value{font-size:34px}
+  .stat-card .stat-icon{width:48px;height:48px;margin-bottom:16px}
+  .page-title{font-size:26px}
+  .data-table th{padding:13px 20px}
+  .data-table td{padding:15px 20px}
+}
+
+/* -- 1440p / 大屏笔记本 -- */
+@media(min-width:1440px) and (max-width:1799px){
+  .main-content{padding:32px 44px}
+  .stats-grid{grid-template-columns:repeat(4,1fr)}
+}
+
+/* -- 平板横屏 / 小屏笔记本 -- */
+@media(max-width:1100px){
+  .main-content{padding:28px 24px}
+  .stats-grid{grid-template-columns:repeat(auto-fill,minmax(240px,1fr))}
+}
+
+/* -- 平板竖屏 / 大手机横屏 -- */
+@media(max-width:860px){
+  .app{flex-direction:column}
+  .sidebar{transform:translateX(-100%);width:280px;max-width:80vw}
+  .sidebar.open{transform:translateX(0)}
+  .mobile-header{display:flex;position:sticky;top:0;width:100%}
+  .main-content{margin-left:0;padding:20px 16px;width:100%;max-width:100%;overflow-x:hidden;min-width:0}
+  .stats-grid{grid-template-columns:1fr 1fr;gap:12px}
+  .stat-card{padding:18px;border-radius:16px}
+  .stat-card .stat-value{font-size:26px}
+  .stat-card .stat-icon{width:38px;height:38px;margin-bottom:12px}
+  .form-row{grid-template-columns:1fr}
+  .modal{max-width:100%;margin:0 12px;border-radius:18px;max-height:90vh}
+  .modal-header{padding:20px 20px 16px}
+  .modal-body{padding:20px}
+  .modal-footer{padding:16px 20px}
+  .page-header{flex-wrap:wrap;margin-bottom:20px;gap:12px}
+  .page-title{font-size:20px}
+  .page-desc{font-size:12.5px;margin-top:4px}
+
+  /* 表格改为卡片式布局 */
+  .data-table thead{display:none}
+  .data-table,
+  .data-table tbody,
+  .data-table tr,
+  .data-table td{display:block;width:100%}
+  .data-table tr{
+    padding:16px;
+    border-bottom:1px solid rgba(255,255,255,.06);
+    position:relative;
+  }
+  .data-table tr:hover td{background:transparent}
+  .data-table tr:hover{background:rgba(255,255,255,.035)}
+  .data-table tr:last-child{border-bottom:none}
+  .data-table td{
+    padding:4px 0;
+    border-bottom:none;
+    font-size:13px;
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  .data-table td::before{
+    content:attr(data-label);
+    font-size:11.5px;
+    font-weight:600;
+    color:var(--text-muted);
+    min-width:72px;
+    flex-shrink:0;
+    text-transform:uppercase;
+    letter-spacing:.04em;
+  }
+  .data-table .actions{
+    padding-top:10px;
+    margin-top:6px;
+    border-top:1px solid rgba(255,255,255,.04);
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+    justify-content:flex-start;
+  }
+  .data-table .actions::before{display:none}
+  .data-table .actions .btn{margin-right:0}
+  .data-table .cell-key{max-width:100%}
+  .data-table .cell-models{max-width:100%}
+  .table-wrap{overflow-x:visible}
+  .card{overflow:visible}
+
+  /* 防止内容溢出 */
+  .tab-panel{min-width:0;overflow-x:hidden}
+
+  /* 详情弹窗全屏化 */
+  #detail-modal-overlay .modal{
+    max-width:100%;max-height:100vh;
+    margin:0;border-radius:0;
+    height:100vh;
+  }
+  .detail-grid{grid-template-columns:1fr 1fr;gap:8px}
+  .detail-section{padding:16px 16px}
+  .detail-code{font-size:11px;padding:12px}
+
+  /* Toast 移动端 */
+  .toast-container{
+    top:auto;bottom:20px;right:12px;left:12px;
+    align-items:stretch;
+  }
+  .toast{max-width:100%}
+}
+
+/* -- 手机竖屏 -- */
 @media(max-width:480px){
-  .stats-grid{grid-template-columns:1fr}
-  .login-card{padding:36px 24px}
+  .stats-grid{grid-template-columns:1fr;gap:10px}
+  .stat-card{padding:16px;border-radius:14px}
+  .stat-card .stat-value{font-size:24px;word-break:break-all}
+  .stat-card .stat-label{font-size:12px}
+  .stat-card .stat-icon{width:36px;height:36px;margin-bottom:10px;border-radius:10px}
+
+  .login-card{padding:32px 20px 26px;border-radius:16px}
+  .logo-orbit{width:60px;height:60px;margin-bottom:12px;border-radius:16px}
+  .login-title{font-size:1.35rem}
+  .login-subtitle{font-size:.82rem}
+  .login-tagline{font-size:11px}
+  .login-input{padding:11px 10px 11px 8px;font-size:12px}
+  .btn-login{padding:11px 16px;font-size:13px}
+  .login-trust{gap:8px;margin-top:20px;padding-top:18px}
+  .login-trust li{font-size:11px}
+
+  .main-content{padding:16px 12px}
+  .page-header{margin-bottom:16px}
+  .page-title{font-size:18px}
+  .page-desc{font-size:12px}
+
+  .mobile-header{padding:10px 14px}
+  .mobile-title{font-size:14px}
+
+  /* 模态框全屏 */
+  .modal-overlay{padding:0}
+  .modal{
+    max-width:100%;max-height:100vh;
+    margin:0;border-radius:0;
+    height:100vh;
+  }
+  .modal-header{padding:16px 16px 14px}
+  .modal-header h3{font-size:16px}
+  .modal-body{padding:16px}
+  .modal-footer{padding:14px 16px}
+  .form-group input,
+  .form-group select,
+  .form-group textarea{padding:10px 14px;font-size:13px;border-radius:8px}
+  .form-group label{font-size:12px}
+  .checkbox-group{max-height:200px;padding:10px}
+  .checkbox-item{padding:8px 10px}
+  .checkbox-item strong{font-size:12.5px}
+  .checkbox-item em{font-size:11px}
+
+  /* 详情弹窗 */
+  .detail-grid{grid-template-columns:1fr}
+  .detail-grid-item{padding:6px 10px}
+  .detail-grid-label{font-size:10.5px}
+  .detail-grid-value{font-size:12.5px}
+  .detail-section{padding:14px 12px}
+  .detail-section-title{font-size:12px}
+  .detail-code{font-size:10.5px;padding:10px;border-radius:8px}
+
+  /* 详情卡片 */
+  .detail-card{padding:14px 14px}
+  .detail-card-header{margin-bottom:8px}
+  .detail-card-meta{gap:6px}
+  .detail-card-meta code{font-size:11px;padding:1px 5px}
+  .detail-card-meta .badge{font-size:10px;padding:3px 8px}
+  .detail-field{flex-direction:column;gap:2px}
+  .detail-label{min-width:unset}
+  .detail-card-stats{gap:8px;flex-wrap:wrap}
+
+  /* 分页 */
+  .details-pager{gap:8px}
+  .details-pager .btn{padding:6px 12px;font-size:12px}
+
+  /* 按钮 */
+  .btn-sm{padding:6px 12px;font-size:12px;border-radius:7px}
+  .btn{padding:9px 16px;font-size:13px;border-radius:9px}
+
+  /* Badge */
+  .badge{font-size:10.5px;padding:3px 10px}
+}
+
+/* -- 超小屏手机 -- */
+@media(max-width:360px){
+  .main-content{padding:12px 10px}
+  .page-title{font-size:16px}
+  .stat-card{padding:14px}
+  .stat-card .stat-value{font-size:22px}
+  .login-card{padding:28px 16px 24px}
+  .login-title{font-size:1.2rem}
+  .mobile-header{padding:8px 12px}
+  .detail-card{padding:12px}
+  .modal-header{padding:14px 14px 12px}
+  .modal-body{padding:14px}
+  .modal-footer{padding:12px 14px}
 }
 
 /* ===== Scrollbar ===== */
@@ -832,6 +1039,24 @@ pre,
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:var(--border-hover)}
+
+/* ===== IP Geolocation Badge ===== */
+.ip-geo{
+  font-size:11px;
+  color:var(--text-muted);
+  font-weight:400;
+  opacity:.85;
+}
+.detail-grid-value .ip-geo{
+  display:inline;
+  margin-left:4px;
+  font-size:12px;
+  color:var(--text-secondary);
+}
+.detail-card-stats .ip-geo{
+  font-size:inherit;
+  color:inherit;
+}
 
 /* ===== Code tags in tables ===== */
 code{

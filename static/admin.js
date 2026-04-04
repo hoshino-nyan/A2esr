@@ -37,6 +37,64 @@
     link: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
   };
 
+  // ── IP Geolocation ──
+
+  var _ipCache = {}; // ip -> { country, city, loading, callbacks }
+
+  function lookupIP(ip, callback) {
+    if (!ip) { callback(''); return; }
+    // 去除端口
+    var cleanIP = ip.replace(/:\d+$/, '');
+    // 私有/本地地址不查询
+    if (/^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|::1|localhost)/i.test(cleanIP)) {
+      callback('本地');
+      return;
+    }
+    var cached = _ipCache[cleanIP];
+    if (cached && !cached.loading) {
+      callback(cached.text);
+      return;
+    }
+    if (cached && cached.loading) {
+      cached.callbacks.push(callback);
+      return;
+    }
+    _ipCache[cleanIP] = { loading: true, callbacks: [callback], text: '' };
+    fetch('http://ip-api.com/json/' + encodeURIComponent(cleanIP) + '?fields=status,country,city&lang=zh-CN')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var text = '';
+        if (data && data.status === 'success') {
+          var parts = [];
+          if (data.country) parts.push(data.country);
+          if (data.city) parts.push(data.city);
+          text = parts.join('·');
+        }
+        _ipCache[cleanIP].loading = false;
+        _ipCache[cleanIP].text = text;
+        _ipCache[cleanIP].callbacks.forEach(function (cb) { cb(text); });
+        _ipCache[cleanIP].callbacks = [];
+      })
+      .catch(function () {
+        _ipCache[cleanIP].loading = false;
+        _ipCache[cleanIP].text = '';
+        _ipCache[cleanIP].callbacks.forEach(function (cb) { cb(''); });
+        _ipCache[cleanIP].callbacks = [];
+      });
+  }
+
+  function formatIPWithGeo(ip, elId) {
+    if (!ip) return '-';
+    var html = 'IP ' + escHtml(ip) + '<span id="' + elId + '" class="ip-geo"></span>';
+    setTimeout(function () {
+      lookupIP(ip, function (geo) {
+        var el = document.getElementById(elId);
+        if (el && geo) el.textContent = ' ' + geo;
+      });
+    }, 0);
+    return html;
+  }
+
   // ── Utility ──
 
   function headers(extra) {
@@ -317,13 +375,13 @@
           + ' / 输出 ' + fmtNum(k.output_tokens || 0)
           + ' / 最后使用 ' + (k.last_used_at ? fmtDate(k.last_used_at) : '未使用');
         return '<tr>'
-          + '<td>' + k.id + '</td>'
-          + '<td><div>' + escHtml(k.name) + '</div><div class="cell-sub">' + escHtml(k.remark || '') + '</div><div class="cell-sub">' + escHtml(stats) + '</div></td>'
-          + '<td class="cell-key" title="' + escHtml(k.key) + '">' + escHtml(k.key) + '</td>'
-          + '<td>' + formatChannelNames(k.channel_ids) + '</td>'
-          + '<td>' + statusBadge(k.status) + '</td>'
-          + '<td>' + (k.qpm || '无限') + '</td>'
-          + '<td>' + fmtDate(k.created_at) + '</td>'
+          + '<td data-label="ID">' + k.id + '</td>'
+          + '<td data-label="名称"><div>' + escHtml(k.name) + '</div><div class="cell-sub">' + escHtml(k.remark || '') + '</div><div class="cell-sub">' + escHtml(stats) + '</div></td>'
+          + '<td class="cell-key" data-label="密钥" title="' + escHtml(k.key) + '">' + escHtml(k.key) + '</td>'
+          + '<td data-label="绑定渠道">' + formatChannelNames(k.channel_ids) + '</td>'
+          + '<td data-label="状态">' + statusBadge(k.status) + '</td>'
+          + '<td data-label="QPM">' + (k.qpm || '无限') + '</td>'
+          + '<td data-label="创建时间">' + fmtDate(k.created_at) + '</td>'
           + '<td class="actions">'
           +   '<button class="btn btn-sm btn-outline" onclick="copyKey(' + k.id + ')">复制</button>'
           +   '<button class="btn btn-sm btn-outline" onclick="toggleKeyStatus(' + k.id + ')">' + (k.status === 1 ? '禁用' : '启用') + '</button>'
@@ -395,18 +453,18 @@
       if (!rows.length) { tbody.innerHTML = emptyRow(13); return; }
       tbody.innerHTML = rows.map(function (c) {
         return '<tr>'
-          + '<td>' + c.id + '</td>'
-          + '<td>' + escHtml(c.name) + '</td>'
-          + '<td>' + typeBadge(c.type) + '</td>'
-          + '<td class="cell-models" title="' + escHtml(c.models) + '">' + escHtml(c.models) + '</td>'
-          + '<td>' + statusBadge(c.status) + '</td>'
-          + '<td>' + c.priority + '</td>'
-          + '<td>' + c.weight + '</td>'
-          + '<td>' + (c.qpm || '无限') + '</td>'
-          + '<td>' + fmtNum(c.used_count) + '</td>'
-          + '<td>' + fmtNum(c.fail_count) + '</td>'
-          + '<td>' + fmtNum(c.input_tokens) + '</td>'
-          + '<td>' + fmtNum(c.output_tokens) + '</td>'
+          + '<td data-label="ID">' + c.id + '</td>'
+          + '<td data-label="名称">' + escHtml(c.name) + '</td>'
+          + '<td data-label="类型">' + typeBadge(c.type) + '</td>'
+          + '<td class="cell-models" data-label="模型" title="' + escHtml(c.models) + '">' + escHtml(c.models) + '</td>'
+          + '<td data-label="状态">' + statusBadge(c.status) + '</td>'
+          + '<td data-label="优先级">' + c.priority + '</td>'
+          + '<td data-label="权重">' + c.weight + '</td>'
+          + '<td data-label="QPM">' + (c.qpm || '无限') + '</td>'
+          + '<td data-label="调用">' + fmtNum(c.used_count) + '</td>'
+          + '<td data-label="失败">' + fmtNum(c.fail_count) + '</td>'
+          + '<td data-label="输入Token">' + fmtNum(c.input_tokens) + '</td>'
+          + '<td data-label="输出Token">' + fmtNum(c.output_tokens) + '</td>'
           + '<td class="actions">'
           +   '<button class="btn btn-sm btn-outline" onclick="editChannel(' + c.id + ')">编辑</button>'
           +   '<button class="btn btn-sm btn-danger btn-icon" onclick="deleteChannel(' + c.id + ')">删除</button>'
@@ -445,15 +503,15 @@
       if (!rows.length) { tbody.innerHTML = emptyRow(10); return; }
       tbody.innerHTML = rows.map(function (m) {
         return '<tr>'
-          + '<td>' + m.id + '</td>'
-          + '<td><div>' + escHtml(m.name || '') + '</div><div class="cell-sub">' + escHtml(m.description || '') + '</div></td>'
-          + '<td><code>' + escHtml(m.client_model) + '</code></td>'
-          + '<td>' + escHtml(formatRouteName(m.route)) + '</td>'
-          + '<td>' + formatChannelNames(m.channel_ids) + '</td>'
-          + '<td><code>' + escHtml(m.upstream_model) + '</code></td>'
-          + '<td>' + fmtNum(m.priority || 0) + '</td>'
-          + '<td>' + statusBadge(m.status) + '</td>'
-          + '<td>' + fmtDate(m.created_at) + '</td>'
+          + '<td data-label="ID">' + m.id + '</td>'
+          + '<td data-label="规则名称"><div>' + escHtml(m.name || '') + '</div><div class="cell-sub">' + escHtml(m.description || '') + '</div></td>'
+          + '<td data-label="客户端模型"><code>' + escHtml(m.client_model) + '</code></td>'
+          + '<td data-label="适用接口">' + escHtml(formatRouteName(m.route)) + '</td>'
+          + '<td data-label="适用渠道">' + formatChannelNames(m.channel_ids) + '</td>'
+          + '<td data-label="上游模型"><code>' + escHtml(m.upstream_model) + '</code></td>'
+          + '<td data-label="优先级">' + fmtNum(m.priority || 0) + '</td>'
+          + '<td data-label="状态">' + statusBadge(m.status) + '</td>'
+          + '<td data-label="创建时间">' + fmtDate(m.created_at) + '</td>'
           + '<td class="actions">'
           +   '<button class="btn btn-sm btn-outline" onclick="editMapping(' + m.id + ')">编辑</button>'
           +   '<button class="btn btn-sm btn-danger btn-icon" onclick="deleteMapping(' + m.id + ')">删除</button>'
@@ -524,7 +582,7 @@
           +     (d.input_tokens ? '<span>输入 ' + fmtNum(d.input_tokens) + '</span>' : '')
           +     (d.output_tokens ? '<span>输出 ' + fmtNum(d.output_tokens) + '</span>' : '')
           +     (d.duration_ms ? '<span>' + d.duration_ms + 'ms</span>' : '')
-          +     (d.client_ip ? '<span>IP ' + escHtml(d.client_ip) + '</span>' : '')
+          +     (d.client_ip ? '<span>' + formatIPWithGeo(d.client_ip, 'ip-card-' + d.id) + '</span>' : '')
           +   '</div>'
           + '</div>'
           + '</div>';
@@ -569,7 +627,7 @@
         +   detailItem('输入Token', fmtNum(d.input_tokens))
         +   detailItem('输出Token', fmtNum(d.output_tokens))
         +   detailItem('耗时', d.duration_ms + 'ms')
-        +   detailItem('客户端IP', d.client_ip)
+        +   detailItemHtml('客户端IP', d.client_ip ? (escHtml(d.client_ip) + '<span id="ip-modal-' + d.id + '" class="ip-geo"></span>') : '-')
         +   detailItem('时间', fmtDate(d.created_at))
         + '</div></div>';
 
@@ -611,6 +669,13 @@
       document.getElementById('detail-modal-body').innerHTML = html;
       document.getElementById('detail-modal-title').textContent = '请求详情 #' + d.id;
       document.getElementById('detail-modal-overlay').classList.remove('hidden');
+      // 查询 IP 地理位置
+      if (d.client_ip) {
+        lookupIP(d.client_ip, function (geo) {
+          var el = document.getElementById('ip-modal-' + d.id);
+          if (el && geo) el.textContent = ' ' + geo;
+        });
+      }
     } catch (err) {
       toast('加载详情失败: ' + err.message, 'error');
     }
@@ -643,6 +708,10 @@
 
   function detailItem(label, value) {
     return '<div class="detail-grid-item"><span class="detail-grid-label">' + escHtml(label) + '</span><span class="detail-grid-value">' + escHtml(value || '-') + '</span></div>';
+  }
+
+  function detailItemHtml(label, html) {
+    return '<div class="detail-grid-item"><span class="detail-grid-label">' + escHtml(label) + '</span><span class="detail-grid-value">' + (html || '-') + '</span></div>';
   }
 
   function truncText(s, max) {
