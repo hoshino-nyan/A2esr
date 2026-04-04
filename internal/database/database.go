@@ -1,7 +1,9 @@
 package database
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -179,7 +181,10 @@ func seedDefaults() error {
 		return nil
 	}
 
+	defaultKey := generateRandomKey()
+
 	log.Println("[DB] 初始化默认管理员用户和 API Key")
+	log.Printf("[DB] 默认 API Key: %s （请登录管理面板后及时修改或删除）", defaultKey)
 	now := time.Now()
 
 	res, err := db.Exec(
@@ -193,7 +198,15 @@ func seedDefaults() error {
 
 	_, err = db.Exec(
 		"INSERT INTO api_keys (user_id, key, name, remark, status, channel_ids, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		userID, "sk-api2cursor-default", "默认密钥", "系统初始化默认密钥", 1, "", now, now,
+		userID, defaultKey, "默认密钥", "首次启动自动生成，请及时修改", 1, "", now, now,
 	)
 	return err
+}
+
+func generateRandomKey() string {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("[DB] 生成随机密钥失败: %v", err)
+	}
+	return "sk-" + hex.EncodeToString(b)
 }

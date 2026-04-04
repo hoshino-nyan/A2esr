@@ -74,7 +74,7 @@ chmod +x deploy.sh
 ### 首次使用
 
 1. 访问 `http://localhost:28473/admin` 进入管理面板
-2. 使用 `ADMIN_TOKEN` 或默认密钥 `sk-api2cursor-default` 登录
+2. 使用 `ADMIN_TOKEN` 登录，或查看首次启动时控制台日志中输出的默认 API Key
 3. 在「渠道管理」中添加至少一个 API 渠道
 4. 在「模型映射」中配置模型名映射
 5. 在 Cursor 中配置 API 地址为 `http://localhost:28473`，API Key 为你创建的密钥
