@@ -653,14 +653,24 @@
 
   // 长文本截断阈值
   var MAX_LINES_TO_SHOW = 5;
-  var MAX_JSON_FORMAT_LENGTH = 50000; // 超过 50KB 的文本跳过 JSON 格式化
   // 当前详情弹窗的元数据（用于下载命名）
   var _detailMeta = { backend: '', model: '', time: '' };
 
   function tryFormatJSON(s) {
     if (!s) return '';
-    if (s.length > MAX_JSON_FORMAT_LENGTH) return s;
-    try { return JSON.stringify(JSON.parse(s), null, 2); } catch (e) { return s; }
+    try {
+      var parsed = JSON.parse(s);
+      return JSON.stringify(parsed, null, 2);
+    } catch (e) {
+      // 可能是多行拼接或转义问题，尝试清理后再解析
+      try {
+        var cleaned = s.trim();
+        var parsed2 = JSON.parse(cleaned);
+        return JSON.stringify(parsed2, null, 2);
+      } catch (e2) {
+        return s;
+      }
+    }
   }
 
   /**
