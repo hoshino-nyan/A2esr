@@ -12,6 +12,7 @@ import (
 
 	"github.com/hoshino-nyan/A2esr/internal/config"
 	"github.com/hoshino-nyan/A2esr/internal/database"
+	"github.com/hoshino-nyan/A2esr/internal/ipgeo"
 	"github.com/hoshino-nyan/A2esr/internal/models"
 )
 
@@ -509,6 +510,11 @@ func ListRequestDetails(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "查询请求详情失败: "+err.Error())
 		return
 	}
+	for _, detail := range details {
+		if ip, ok := detail["client_ip"].(string); ok && ip != "" {
+			detail["client_ip_location"] = ipgeo.Lookup(ip)
+		}
+	}
 	count, _ := database.GetRequestDetailCount()
 	writeJSON(w, http.StatusOK, J{"data": details, "total": count})
 }
@@ -532,6 +538,9 @@ func GetRequestDetail(w http.ResponseWriter, r *http.Request) {
 	if detail == nil {
 		writeError(w, http.StatusNotFound, "记录不存在")
 		return
+	}
+	if ip, ok := detail["client_ip"].(string); ok && ip != "" {
+		detail["client_ip_location"] = ipgeo.Lookup(ip)
 	}
 	writeJSON(w, http.StatusOK, detail)
 }

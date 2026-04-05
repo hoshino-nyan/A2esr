@@ -34,65 +34,12 @@
     'arrow-up': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>',
     user: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
     key: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>',
-    link: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+    link: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 1 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
   };
 
-  // ── IP Geolocation ──
-
-  var _ipCache = {}; // ip -> { country, city, loading, callbacks }
-
-  function lookupIP(ip, callback) {
-    if (!ip) { callback(''); return; }
-    // 去除端口
-    var cleanIP = ip.replace(/:\d+$/, '');
-    // 私有/本地地址不查询
-    if (/^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|::1|localhost)/i.test(cleanIP)) {
-      callback('本地');
-      return;
-    }
-    var cached = _ipCache[cleanIP];
-    if (cached && !cached.loading) {
-      callback(cached.text);
-      return;
-    }
-    if (cached && cached.loading) {
-      cached.callbacks.push(callback);
-      return;
-    }
-    _ipCache[cleanIP] = { loading: true, callbacks: [callback], text: '' };
-    fetch('http://ip-api.com/json/' + encodeURIComponent(cleanIP) + '?fields=status,country,city&lang=zh-CN')
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        var text = '';
-        if (data && data.status === 'success') {
-          var parts = [];
-          if (data.country) parts.push(data.country);
-          if (data.city) parts.push(data.city);
-          text = parts.join('·');
-        }
-        _ipCache[cleanIP].loading = false;
-        _ipCache[cleanIP].text = text;
-        _ipCache[cleanIP].callbacks.forEach(function (cb) { cb(text); });
-        _ipCache[cleanIP].callbacks = [];
-      })
-      .catch(function () {
-        _ipCache[cleanIP].loading = false;
-        _ipCache[cleanIP].text = '';
-        _ipCache[cleanIP].callbacks.forEach(function (cb) { cb(''); });
-        _ipCache[cleanIP].callbacks = [];
-      });
-  }
-
-  function formatIPWithGeo(ip, elId) {
+  function formatIPWithGeo(ip, location) {
     if (!ip) return '-';
-    var html = 'IP ' + escHtml(ip) + '<span id="' + elId + '" class="ip-geo"></span>';
-    setTimeout(function () {
-      lookupIP(ip, function (geo) {
-        var el = document.getElementById(elId);
-        if (el && geo) el.textContent = ' ' + geo;
-      });
-    }, 0);
-    return html;
+    return 'IP ' + escHtml(ip) + (location ? '<span class="ip-geo"> ' + escHtml(location) + '</span>' : '');
   }
 
   // ── Utility ──
@@ -582,7 +529,7 @@
           +     (d.input_tokens ? '<span>输入 ' + fmtNum(d.input_tokens) + '</span>' : '')
           +     (d.output_tokens ? '<span>输出 ' + fmtNum(d.output_tokens) + '</span>' : '')
           +     (d.duration_ms ? '<span>' + d.duration_ms + 'ms</span>' : '')
-          +     (d.client_ip ? '<span>' + formatIPWithGeo(d.client_ip, 'ip-card-' + d.id) + '</span>' : '')
+          +     (d.client_ip ? '<span>' + formatIPWithGeo(d.client_ip, d.client_ip_location) + '</span>' : '')
           +   '</div>'
           + '</div>'
           + '</div>';
@@ -627,7 +574,7 @@
         +   detailItem('输入Token', fmtNum(d.input_tokens))
         +   detailItem('输出Token', fmtNum(d.output_tokens))
         +   detailItem('耗时', d.duration_ms + 'ms')
-        +   detailItemHtml('客户端IP', d.client_ip ? (escHtml(d.client_ip) + '<span id="ip-modal-' + d.id + '" class="ip-geo"></span>') : '-')
+        +   detailItemHtml('客户端IP', d.client_ip ? formatIPWithGeo(d.client_ip, d.client_ip_location).replace(/^IP\s/, '') : '-')
         +   detailItem('时间', fmtDate(d.created_at))
         + '</div></div>';
 
@@ -669,13 +616,6 @@
       document.getElementById('detail-modal-body').innerHTML = html;
       document.getElementById('detail-modal-title').textContent = '请求详情 #' + d.id;
       document.getElementById('detail-modal-overlay').classList.remove('hidden');
-      // 查询 IP 地理位置
-      if (d.client_ip) {
-        lookupIP(d.client_ip, function (geo) {
-          var el = document.getElementById('ip-modal-' + d.id);
-          if (el && geo) el.textContent = ' ' + geo;
-        });
-      }
     } catch (err) {
       toast('加载详情失败: ' + err.message, 'error');
     }
